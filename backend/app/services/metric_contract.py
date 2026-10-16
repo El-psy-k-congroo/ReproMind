@@ -13,6 +13,7 @@ def metric_name(value):
 
 
 def metric_number(value, name):
+    percent = False
     if isinstance(value, dict):
         value = value.get('mean', value.get('value'))
     if isinstance(value, str):
@@ -20,10 +21,11 @@ def metric_number(value, name):
         match = re.fullmatch(r'\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*(%)?(?:\s*(?:±|\+/-)\s*\d*\.?\d+\s*%?)?\s*', value)
         if not match:
             return None
+        percent = bool(match[2])
         value = float(match[1])
     if type(value) not in {int, float} or not math.isfinite(value):
         return None
-    return value / 100 if metric_name(name) in RATIOS and value > 1 else float(value)
+    return value / 100 if metric_name(name) in RATIOS and (value > 1 or percent) else float(value)
 
 
 def dataset_targets(spec):
@@ -68,7 +70,7 @@ def target_tolerance(spec, dataset, metric):
                 if match:
                     uncertainty = float(match[1])
                     mean = re.match(r'\s*(\d*\.?\d+)', value)
-                    if mean and float(mean[1]) > 1 and metric_name(metric) in RATIOS:
+                    if mean and (float(mean[1]) > 1 or '%' in value) and metric_name(metric) in RATIOS:
                         uncertainty /= 100
             if type(uncertainty) in {int,float} and math.isfinite(uncertainty) and uncertainty >= 0:
                 return uncertainty, '使用论文报告的一个标准差作数值比较，不能替代多次运行或协议验收'

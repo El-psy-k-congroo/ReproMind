@@ -3780,7 +3780,7 @@ async def _install_uploaded_datasets(session, job: ReproductionJob) -> list[str]
 
 
 def _target_for_dataset(paper_spec: dict[str, Any], dataset: str, metric_key: str = "accuracy") -> float | None:
-    from .metric_contract import dataset_targets, metric_name
+    from .metric_contract import dataset_targets, metric_name, metric_number
     normalized = dataset_targets(paper_spec)
     for label, metrics in normalized.items():
         if label.casefold() == dataset.casefold():
@@ -3793,11 +3793,7 @@ def _target_for_dataset(paper_spec: dict[str, Any], dataset: str, metric_key: st
             if isinstance(value, dict):
                 value = next((metric_value for metric_name, metric_value in value.items()
                               if ("accuracy" if str(metric_name).lower() == "acc" else str(metric_name).lower()) == metric_key), None)
-            try:
-                numeric = float(value)
-                return numeric / 100 if numeric > 1 and metric_key not in {"rmse", "mae", "mse", "loss"} else numeric
-            except (TypeError, ValueError):
-                return None
+            return metric_number(value, metric_key)
     return None
 
 

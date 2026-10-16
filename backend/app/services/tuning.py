@@ -213,21 +213,27 @@ def build_tuning_plans(job, budget=6):
 
 def validation_score(output, metric):
     import re
-    aliases = {'accuracy': 'acc(?:uracy)?', 'auc': '(?:auc|auroc)', 'f1': 'f1(?:[-_]score)?'}
+    from .metric_contract import metric_name, RATIOS
+    metric = metric_name(metric)
+    aliases = {'accuracy': 'acc(?:uracy)?', 'auc': '(?:auc|auroc)', 'f1': 'f1(?:[-_]score)?',
+               'top1error': 'top[ _-]?1[ _-]*(?:err(?:or)?)', 'top5error': 'top[ _-]?5[ _-]*(?:err(?:or)?)'}
     name = aliases.get(metric, re.escape(metric))
+    separator = r'\s*(?:[:=]|\s)\s*'
     values=[];epochs={};active_epoch=None
     for line in output.splitlines():
         if re.search(r'\bfinal\s+(?:evaluation|test)|\bload(?:ing)?\s+\d+(?:st|nd|rd|th)?\s+epoch',line,re.I):active_epoch=None
         epoch=re.search(r'\bepoch\s*[:=]?\s*\[?\s*(\d+)',line,re.I)
         if epoch:active_epoch=int(epoch[1])
         segment = re.search(r'\b(?:val(?:idation)?|valid)\b(.*?)(?=\b(?:train(?:ing)?|test)\b|$)',line,re.I)
-        direct = re.search(r'\b(?:val(?:idation)?|valid)[_\s-]*'+name+r'\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',line,re.I)
-        match = direct or (re.search(r'\b'+name+r'\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',segment[1],re.I) if segment else None)
+        direct = re.search(r'\b(?:val(?:idation)?|valid)[_\s-]*'+name+separator+r'(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',line,re.I)
+        match = direct or (re.search(r'\b'+name+separator+r'(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',segment[1],re.I) if segment else None)
         if not match: continue
         value=float(match[1])
         if not math.isfinite(value): continue
-        if metric in {'accuracy','auc','f1'} and value>1: value/=100
-        if metric in {'accuracy','auc','f1'} and not 0<=value<=1: continue
+        percent = bool(re.match(r'\s*%', (line if direct else segment[1])[match.end():]))
+        if metric in RATIOS and (value>1 or percent): value/=100
+        if metric in RATIOS and not 0<=value<=1: continue
+        if metric in {'rmse','mae','mse','prd','fid','perplexity'} and value<0: continue
         values.append(value)
         if active_epoch is not None: epochs[active_epoch]=value
     restored=re.findall(r'\bload(?:ing)?\s+(\d+)(?:st|nd|rd|th)?\s+epoch',output,re.I)
@@ -236,7 +242,8 @@ def validation_score(output, metric):
 
 
 def best_trial(records, baseline, metric):
-    lower = metric in {'loss', 'mae', 'mse', 'rmse'}
+    from .metric_contract import LOWER, metric_name
+    lower = metric_name(metric) in LOWER
     winner, score = None, baseline
     for index, record in enumerate(records):
         value = record.get('validation_score')
