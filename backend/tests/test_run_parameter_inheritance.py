@@ -81,3 +81,23 @@ def test_planner_receives_historical_cli_not_mutable_source_defaults():
     rows = historical_parameter_context(base(['python','train.py','--width','64','--dropout','.1']))
     assert rows[0]['recorded_cli_overrides'] == {'width':64,'dropout':.1}
     assert rows[0]['execution_snapshot'] == {}
+
+
+def test_verified_positional_config_remaps_to_copy_and_keeps_new_output(tmp_path):
+    source=tmp_path/'source';copied=tmp_path/'branches'/'new'/'source'
+    config=source/'configs'/'run.toml';new_config=copied/'configs'/'run.toml'
+    output=tmp_path/'outputs'/'new'/'example'
+    old=base(['python','run.py',str(config),'--output',str(tmp_path/'outputs'/'old'),'--lr','.01'])
+    old.workspace_path=str(tmp_path);old.execution_command['pythonpath']=str(source)
+    new={'commands':[{'dataset':'Custom','argv':['python','run.py',str(new_config),'--output',str(output)]}]}
+    result=inherit_dataset_parameters(old,new,copied,fresh_output_roots=(output.parent,))
+    argv=result['commands'][0]['argv']
+    assert str(new_config) in argv and argv[argv.index('--output')+1]==str(output)
+    assert '--lr .01' in ' '.join(argv)
+
+
+def test_changed_positional_model_or_dataset_is_not_silently_inherited():
+    old=base(['python','run.py','dataset-a','model-a'])
+    new={'commands':[{'dataset':'Custom','argv':['python','run.py','dataset-b','model-a']}]}
+    with pytest.raises(ValueError,match='位置参数'):
+        inherit_dataset_parameters(old,new,'new')

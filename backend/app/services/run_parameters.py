@@ -7,9 +7,12 @@ from pathlib import Path
 from .tuning import numeric_flags
 
 
-def _options(argv):
+def _options(argv, leading_positionals=()):
     argv = list(argv or [])
     offset = 3 if len(argv) > 2 and argv[1] == '-m' else min(2, len(argv))
+    if list(map(str, argv[offset:offset + len(leading_positionals)])) != list(map(str, leading_positionals)):
+        raise ValueError('位置参数与新计划不一致，未启动实验')
+    offset += len(leading_positionals)
     groups = {}
     current = None
     for token in argv[offset:]:
@@ -24,6 +27,15 @@ def _options(argv):
         else:
             raise ValueError('历史命令含无法安全继承的位置参数，需明确运行参数，未启动实验')
     return argv[:offset], groups
+
+
+def _leading_positionals(argv):
+    offset = 3 if len(argv) > 2 and argv[1] == '-m' else min(2, len(argv))
+    result = []
+    for token in argv[offset:]:
+        if re.match(r'^--?[A-Za-z_]', str(token)): break
+        result.append(str(token))
+    return result
 
 
 def _cli_defaults(text):
@@ -135,7 +147,7 @@ def historical_parameter_context(base):
     return evidence
 
 
-def inherit_dataset_parameters(base, planned, source, changed=()):
+def inherit_dataset_parameters(base, planned, source, changed=(), fresh_output_roots=()):
     """Fresh launch/data paths + recorded arguments; deliberate edits take precedence.
 
     This applies to any supported dataset/CLI, not just NELL or epoch requests.
@@ -154,10 +166,30 @@ def inherit_dataset_parameters(base, planned, source, changed=()):
         previous = row.get('baseline_argv') or commands.get(dataset, {}).get('argv')
         if not previous:
             continue
-        _, historical = _options(previous)
-        launcher, fresh = _options(command['argv'])
+        historical_positions = _leading_positionals(previous)
+        fresh_positions = _leading_positionals(command['argv'])
+        mapped_positions = [token.replace(old_source, str(source)) if old_source else token
+                            for token in historical_positions]
+        from .source_selection import native_path
+        def same_position(left, right):
+            return left == right or (Path(left).is_absolute() and Path(right).is_absolute()
+                                    and native_path(left) == native_path(right))
+        if len(mapped_positions) != len(fresh_positions) or not all(
+                same_position(left,right) for left,right in zip(mapped_positions,fresh_positions)):
+            raise ValueError('历史命令含无法安全继承的位置参数；与当前作者计划不一致，未启动实验')
+        _, historical = _options(previous, historical_positions)
+        launcher, fresh = _options(command['argv'], fresh_positions)
         # Dataset variants/paths must still be checked against the current loader.
         authoritative = {'dataset'} | changed
+        # The command builder binds these paths to this new run. Never restore
+        # an old --output value over a new isolated output directory.
+        for key,tokens in fresh.items():
+            if not re.fullmatch(r'(?:output|output[-_]dir|save[-_]dir|log[-_]dir)',key): continue
+            value = tokens[0].split('=',1)[1] if '=' in tokens[0] else tokens[1] if len(tokens)==2 else ''
+            if value and Path(value).is_absolute() and any(
+                    native_path(root) == native_path(value) or native_path(root) in native_path(value).parents
+                    for root in fresh_output_roots):
+                authoritative.add(key)
         kept = []
         for key, tokens in historical.items():
             if key in authoritative:

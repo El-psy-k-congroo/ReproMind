@@ -438,7 +438,8 @@ def _fresh_run_command(base: ReproductionJob, source: Path, run_workspace: Path,
     _align_dataset_commands(holder)
     planned = holder.execution_command
     try:
-        planned = inherit_dataset_parameters(base, planned, source, changed_parameters)
+        planned = inherit_dataset_parameters(base, planned, source, changed_parameters,
+            fresh_output_roots=(run_workspace, run_workspace.parents[1] / 'outputs' / run_workspace.name[:8]))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     planned["argv"] = planned["commands"][0]["argv"]
