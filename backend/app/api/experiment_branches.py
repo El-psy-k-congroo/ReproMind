@@ -693,6 +693,13 @@ async def apply_revision(project_id: str, job_id: str, payload: BranchConfirmReq
     try:
         for name, body in updated.items():
             _code_file(source, name).write_text(body, encoding="utf-8")
+        from ..services.editable_source import dependency_file
+        dependency_hashes = {name: proposal['updated_sha256'][name] for name in updated if dependency_file(name)}
+        if dependency_hashes:
+            base.environment_spec = {**(base.environment_spec or {}), 'dependency_revision': {
+                'proposal_id':payload.proposal_id, 'sha256':{
+                    **((base.environment_spec or {}).get('dependency_revision') or {}).get('sha256', {}),
+                    **dependency_hashes}}}
         proposal["applied_at"] = datetime.now(timezone.utc).isoformat()
         proposal_file.write_text(json.dumps(proposal, ensure_ascii=False), encoding="utf-8")
         base.events = [*(base.events or []), {"stage": "code_revision", "progress": base.progress,

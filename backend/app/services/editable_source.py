@@ -12,6 +12,10 @@ def editable_file(name):
     return Path(name).suffix.lower() in {'.py', '.yaml', '.yml', '.toml', '.json'} or requirements_file(name)
 
 
+def dependency_file(name):
+    return requirements_file(name) or Path(name).name in {'pyproject.toml','setup.py','environment.yml','environment.yaml'}
+
+
 def validate_requirements(content):
     """Syntax only. Installation and platform compatibility remain runtime checks."""
     logical = content.replace('\\\n', '')

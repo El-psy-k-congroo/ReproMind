@@ -2799,7 +2799,71 @@ async def _run_environment_operation(session, job, workspace, command, timeout, 
         await session.commit()
 
 
+async def _refresh_reviewed_dependencies(job, workspace):
+    """Replan reviewed dependency edits without installing or replacing environments."""
+    from .editable_source import dependency_file
+    original = dict(job.environment_spec or {})
+    reviewed = dict(original.get('dependency_revision') or {})
+    expected = dict(reviewed.get('sha256') or {})
+    revisions = (getattr(job, 'result_json', None) or {}).get('code_revisions') or []
+    for row in revisions:
+        changed = [name for name in row.get('files', []) if dependency_file(name)]
+        if not changed:
+            continue
+        from uuid import UUID
+        identifier = str(UUID(str(row.get('proposal_id'))))
+        proposal = json.loads((workspace/'runs'/job.id/'proposals'/f'{identifier}.json').read_text(encoding='utf-8'))
+        expected.update({name: (proposal.get('updated_sha256') or {}).get(name) for name in changed})
+    files = set(expected)
+    if not files:
+        return False
+    source = Path(str((job.execution_command or {}).get('pythonpath') or '')).resolve()
+    if workspace.resolve() not in source.parents or not source.is_dir():
+        raise ValueError('依赖变更的作者源码路径未通过项目归属校验')
+    fingerprints = {}
+    for name in files:
+        candidate = source / name
+        path = candidate.resolve()
+        if source not in path.parents or not path.is_file() or candidate.is_symlink():
+            raise ValueError('已审查依赖文件不存在或越界，不能沿用旧安装计划')
+        fingerprints[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if fingerprints[name] != expected[name]:
+            raise ValueError('依赖文件已偏离审查后的版本，不能自动安装；请重新生成并审查提案')
+    if original.get('reviewed_dependency_sha256') == fingerprints:
+        return False
+    manifest = await asyncio.to_thread(_repository_manifest, source)
+    manifest['entrypoints'] = original.get('source_entrypoints') or (job.execution_command or {}).get('entrypoint_candidates') or manifest['entrypoints']
+    plan = await asyncio.to_thread(_environment_plan, source, manifest, workspace,
+        (job.paper_spec or {}).get('model_name') or 'paper-model',
+        gpu_requested=bool(original.get('gpu_requested') or (original.get('hardware_plan') or {}).get('requirement') == 'required'))
+    # An applied dependency edit never changes the identity of an existing
+    # project environment. Rebind newly generated install commands to it.
+    if original.get('prefix') and original.get('environment_name'):
+        fresh_python = str(_environment_python(Path(plan['prefix'])))
+        old_python = str(_environment_python(Path(original['prefix'])))
+        replacements = {fresh_python: old_python, plan['environment_name']: original['environment_name']}
+        for key in ['create_commands', 'install_commands']:
+            plan[key] = [[replacements.get(str(arg), str(arg)) for arg in command] for command in plan[key]]
+        plan.update(prefix=original['prefix'], environment_name=original['environment_name'],
+                    activation_command='conda activate ' + original['environment_name'])
+    plan = await _existing_environment_plan(job, plan)
+    from .host_environment import inspect_host_requirements
+    check = await inspect_host_requirements(source, plan)
+    plan.update(host_compatibility=check, reviewed_dependency_sha256=fingerprints,
+                dependency_revision={'sha256':fingerprints},
+                dependency_revision_pending_install=True, ready=False,
+                recheck_on_run=bool(original.get('recheck_on_run')),
+                display_commands=[subprocess.list2cmdline(command) for command in [*plan['create_commands'], *plan['install_commands']]])
+    if check.get('issues'):
+        plan['platform_alert'] = {'title':'修订后的依赖与当前运行条件需要核验',
+            'issues':check['issues'], 'reason':'依赖计划已根据审查后文件重算；检查未通过时不会安装。'}
+    job.environment_spec = plan
+    return True
+
+
 async def _ensure_environment(session, job: ReproductionJob, workspace: Path) -> Path:
+    if await _refresh_reviewed_dependencies(job, workspace):
+        await session.commit()
     spec = dict(job.environment_spec or {})
     if (spec.get('host_compatibility') or {}).get('issues'):
         raise RuntimeError('主机依赖预检未通过：' + '；'.join(row['reason'] + '：' + row['requirement'] for row in spec['host_compatibility']['issues']))
@@ -2817,7 +2881,7 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
         raise ValueError(f"Conda 环境 {environment_name} 的项目归属无法验证，不会修改现有环境")
     approved_gpu_recovery=bool(spec.get('gpu_recovery_pending') and
                               (spec.get('gpu_environment_migration') or {}).get('approved'))
-    if env_python.is_file() and (marker.is_file() or approved_gpu_recovery):
+    if env_python.is_file() and (marker.is_file() or approved_gpu_recovery) and not spec.get('dependency_revision_pending_install'):
         if spec.get("recheck_on_run"):
             await _recheck_existing_environment(session, job, workspace, env_python)
             if approved_gpu_recovery:
@@ -2833,7 +2897,7 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
             await session.commit()
         await _advance(session, job, "environment_building", 87, f"复用并核对 Conda 环境：{environment_name}")
         return env_python
-    if spec.get("recheck_on_run"):
+    if spec.get("recheck_on_run") and not spec.get('dependency_revision_pending_install'):
         raise RuntimeError("后续实验要求复用当前项目环境，但原环境不可用；不会另建环境。请先修复原环境。")
 
     create_commands = [] if env_python.is_file() else spec.get("create_commands", [])
@@ -2912,6 +2976,7 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
     if not env_python.is_file():
         raise RuntimeError("环境命令结束后未找到环境 Python")
     spec['dependencies_installed']=True
+    spec['dependency_revision_pending_install']=False
     job.environment_spec=spec
     await session.commit()
     hardware = spec.get("hardware_plan") or {}
