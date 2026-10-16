@@ -1,5 +1,5 @@
 import pytest
-from app.api.copilot import _code_action_requested, _rerun_requested
+from app.api.copilot import _code_action_requested, _rerun_requested, _run_instruction
 
 
 @pytest.mark.parametrize('question', [
@@ -20,3 +20,8 @@ def test_completed_code_context_cannot_turn_run_request_into_code_generation(que
 ])
 def test_new_code_directive_remains_actionable(question):
     assert _code_action_requested(question)
+
+
+def test_conditional_prefix_is_not_lost_when_splitting_a_comma():
+    assert not _run_instruction('如果环境已经就绪，请启动当前实验。')
+    assert _run_instruction('请启动当前实验，如果出错请说明原因。')

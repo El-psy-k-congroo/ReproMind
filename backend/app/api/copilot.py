@@ -358,7 +358,13 @@ _RUN_VERBS = r'重跑|重新跑|再跑|跑一下|跑一遍|运行|启动|开始�
 
 def _run_instruction(question: str) -> bool:
     """Recognize an imperative in its own clause; negatives apply locally."""
-    clauses = re.split(r'[；;。！!\n]', question.lower())
+    clauses = []
+    for sentence in re.split(r'[；;。！!\n]', question.lower()):
+        conditional = False
+        for clause in re.split(r'[，,]', sentence):
+            conditional = conditional or bool(re.search(r'如果|假如|假设|要是|倘若', clause))
+            if not conditional:
+                clauses.append(clause)
     for clause in clauses:
         if re.search(r'请问|(?:现在|当前|目前)(?:还|的|有)|可以吗|能够吗|能否|是否|为什么|如何|怎么|吗[？?]?\s*$', clause):
             continue
