@@ -1142,17 +1142,27 @@ def _code_action_requested(question: str) -> bool:
         return False
     if _question_only(question) or any(term in lowered for term in ("先不要改", "不要修改", "别修改", "只解释", "只分析", "只看看")):
         return False
-    action = bool(
-        re.search(r'(?:用|使用)\s*pytorch\s*(?:复现|重写|实现)', lowered)
-        or
-        re.search(r"(?:请|帮我|麻烦|现在|直接|立即|把|将).{0,30}(?:修改|修复|改成|改为|替换|迁移|移到|移动|适配|调整|重构|添加|删除|切换|实现)", lowered)
-        or re.match(r"\s*(?:修改|修复|迁移|移到|移动|适配|调整|重构|添加|删除|改成|改为|切换)", lowered)
-    )
-    target = any(term in lowered for term in (
+    targets = (
         "代码", "脚本", ".py", "gpu", "cuda", "模型", "训练", "实验", "参数", "维度",
-        "hidden_dim", "dropout", "learning_rate", "batch_size", "epoch", "数据加载", "预处理", "优化器", "损失函数",
-    ))
-    return action and target
+        "hidden_dim", "dropout", "learning_rate", "batch_size", "epoch", "数据加载", "预处理", "优化器", "损失函数", "pytorch", "tensorflow",
+    )
+    # A completed change in the next sentence is context, not another command.
+    # Keep the directive and its action in the same clause.
+    verbs = r'修改|修复|改成|改为|替换|迁移|移到|移动|适配|调整|重构|添加|删除|切换|实现'
+    for clause in re.split(r'[。；;\n，,]', lowered):
+        if not any(term in clause for term in targets):
+            continue
+        if re.search(r'(?:用|使用)\s*pytorch\s*(?:复现|重写|实现)', clause):
+            return True
+        for verb in re.finditer(verbs, clause):
+            before, after = clause[:verb.start()], clause[verb.end():]
+            if re.search(r'(?:已经|已|刚刚|之前|此前).{0,10}$', before) and not re.search(r'继续\s*$', before):
+                continue
+            if re.match(r'.{0,6}(?:已经|已)(?:经)?(?:应用|保存|完成|通过)', after):
+                continue
+            if re.search(r'(?:请|帮我|麻烦|现在|直接|立即|把|将|继续).{0,30}$', before) or not before.strip():
+                return True
+    return False
 
 
 def _experiment_control_requested(question: str) -> str:
