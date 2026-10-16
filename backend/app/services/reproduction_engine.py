@@ -396,6 +396,17 @@ async def _run_process(
     return await asyncio.to_thread(invoke)
 
 
+async def _run_author_process(*args, **kwargs):
+    code, output = await _run_process(*args, **kwargs)
+    from .runtime_outcome import reported_exception, MARKER
+    failure = reported_exception(output) if code == 0 else None
+    # Explicit final metrics after an exception can demonstrate recovery. A
+    # caught traceback by itself, or a completion print, does not prove success.
+    if failure and not _extract_metrics(output[failure['end']:]):
+        return 1, output + '\n' + MARKER + '; terminal_exception=' + failure['kind'] + '\n'
+    return code, output
+
+
 async def _clone_repository(url: str, workspace: Path, run_workspace: Path) -> tuple[Path, str]:
     if urlparse(url).hostname == 'zenodo.org':
         return await _download_zenodo_source(url, workspace, run_workspace)
@@ -2390,6 +2401,9 @@ def _primary_metric(paper_spec: dict[str, Any], metrics: dict[str, float]) -> st
 
 def _diagnose_failure(output: str, cwd: Path | None = None, dataset: str = "") -> dict[str, str]:
     kind, detail = terminal_exception(output)
+    if kind.rsplit('.',1)[-1] in {'SSLError','ConnectError','ConnectionError','ReadTimeout','ConnectTimeout','RemoteProtocolError'} and re.search(r'https?://|HTTPSConnectionPool|requests[\\/]|urllib|httpx',output,re.I):
+        return {'type':'network_download','reason':kind+': '+detail[:600],
+                'suggestion':'已知下载来源发生网络、TLS 或远端连接错误；获取未完成，不等于作者缺少数据。保留下载证据，网络恢复后重试作者来源；不通过关闭 TLS 校验或修改模型来伪装成功。'}
     dependency_plan = compatibility_plan(output)
     if dependency_plan:
         return {'type':'dependency_api_incompatible','suggestion':dependency_plan['reason']}
@@ -2653,7 +2667,7 @@ async def _agent_repair_code(
     try:
         if progress_callback:
             await progress_callback()
-        code, retry_output = await _run_process(
+        code, retry_output = await _run_author_process(
             argv, cwd, max(get_settings().reproduction_timeout_seconds, get_settings().experiment_timeout_seconds), run_env,
             output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-agent-repair-{attempt}.log",
         )
@@ -2662,6 +2676,8 @@ async def _agent_repair_code(
         raise
     record["backup"] = str(backup)
     record["return_code"] = code
+    from .runtime_outcome import process_exit_code
+    record['process_exit_code'] = process_exit_code(code, retry_output)
     record['updated_sha256'] = hashlib.sha256(updated.encode()).hexdigest()
     if code == 0:
         record["applied"] = True
@@ -3838,10 +3854,12 @@ async def _run_tuning(plan, argv, cwd, env, timeout, log_root, baseline_output, 
             log_path = log_path.with_stem(log_path.stem + f'-retry-{time.time_ns()}')
         if on_trial:
             await on_trial(index + 1, parameters, log_path)
-        code, output = await _run_process(trial_argv, trial_cwd, min(timeout, remaining), trial_env, output_path=log_path)
+        code, output = await _run_author_process(trial_argv, trial_cwd, min(timeout, remaining), trial_env, output_path=log_path)
         score = validation_score(output, metric)
         test_metrics = _extract_metrics(output)
+        from .runtime_outcome import process_exit_code
         records.append({'dataset': plan.get('dataset'), 'trial': index + 1,
+                        'process_exit_code': process_exit_code(code, output),
                         'parameters': parameters, 'validation_metric': metric,
                         'validation_score': score, 'test_metrics': test_metrics,
                         'validation_accuracy': score if metric == 'accuracy' else None,
@@ -3995,7 +4013,7 @@ def _write_reproduction_report(job: ReproductionJob, workspace: Path) -> Path:
         "",
         "## 数据集结果",
         "",
-        "| 数据集 | 主指标 | 返回码 | 实际指标 | 论文目标 | 差值 | 判定 |",
+        "| 数据集 | 主指标 | 判定码 / 进程退出码 | 实际指标 | 论文目标 | 差值 | 判定 |",
         "|---|---|---:|---:|---:|---:|---|",
     ]
     if dataset_results:
@@ -4005,7 +4023,7 @@ def _write_reproduction_report(job: ReproductionJob, workspace: Path) -> Path:
             target = item.get("target")
             delta = item.get("delta")
             lines.append(
-                f"| {item.get('dataset', '')} | {metric_key} | {item.get('return_code', '')} | "
+                f"| {item.get('dataset', '')} | {metric_key} | {item.get('return_code', '')} / {item.get('process_exit_code', item.get('return_code', ''))} | "
                 f"{actual if actual is not None else '未提取'} | "
                 f"{target if target is not None else '未声明'} | "
                 f"{delta if delta is not None else '-'} | {item.get('verdict', '')} |"
@@ -4249,7 +4267,7 @@ async def execute_reproduction(job_id: str) -> None:
                 experiment_started = time.perf_counter()
                 training_timeout = max(get_settings().reproduction_timeout_seconds,
                                        get_settings().experiment_timeout_seconds)
-                return_code, output = await _run_process(
+                return_code, output = await _run_author_process(
                     argv, cwd, training_timeout, item_env,
                     output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-original.log",
                 )
@@ -4260,7 +4278,7 @@ async def execute_reproduction(job_id: str) -> None:
                         updated = next(row for row in job.execution_command["commands"] if row["dataset"] == dataset)
                         argv = list(updated["argv"])
                         repairs.extend({"dataset": change["dataset"], "type": "dataset_argument", **change} for change in changes)
-                        return_code, output = await _run_process(
+                        return_code, output = await _run_author_process(
                             argv, cwd, training_timeout, item_env,
                             output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-data-retry.log",
                         )
@@ -4269,7 +4287,7 @@ async def execute_reproduction(job_id: str) -> None:
                     created_dir = _repair_missing_output_directory(cwd, output)
                     if created_dir:
                         repairs.append({"dataset": dataset, "type": "created_output_directory", "path": created_dir})
-                        return_code, output = await _run_process(
+                        return_code, output = await _run_author_process(
                             argv, cwd, training_timeout, item_env,
                             output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-output-dir-retry.log",
                         )
@@ -4294,7 +4312,7 @@ async def execute_reproduction(job_id: str) -> None:
                         "reason": "作者数据含关系节点；按论文为关系节点构造独立 one-hot 特征并使用 NELL 专用超参数",
                     })
                     await session.commit()
-                    return_code, output = await _run_process(
+                    return_code, output = await _run_author_process(
                         argv, cwd, training_timeout, item_env,
                         output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-loader-retry.log",
                     )
@@ -4304,7 +4322,7 @@ async def execute_reproduction(job_id: str) -> None:
                     if dependency_repair:
                         repairs.append({'dataset':dataset,**dependency_repair})
                         if dependency_repair.get('applied'):
-                            return_code,output = await _run_process(argv,cwd,training_timeout,item_env,
+                            return_code,output = await _run_author_process(argv,cwd,training_timeout,item_env,
                                 output_path=workspace/'runs'/job.id/'telemetry'/f'{_slug(dataset)}-dependency-api-retry.log')
                             combined_output += '\n依赖 API 修复后重试：\n'+output
                 source_import_failures = set()
@@ -4330,7 +4348,7 @@ async def execute_reproduction(job_id: str) -> None:
                         if references: source_import_failures.add(references[-1])
                     if not repaired:
                         break
-                    return_code, output = await _run_process(
+                    return_code, output = await _run_author_process(
                         argv, cwd, training_timeout, item_env,
                         output_path=workspace / "runs" / job.id / "telemetry" / f"{_slug(dataset)}-dependency-retry-{attempt + 1}.log",
                     )
@@ -4344,7 +4362,7 @@ async def execute_reproduction(job_id: str) -> None:
                     output += ('\n[RuntimeOutputMissing] 作者入口退出，但未产出本次要求的全部评估指标：'
                                + ','.join(sorted(required_metrics)) + '。只可修正已有作者评估调用或真实结果记录，不得打印固定指标或改变模型和测试数据。')
                 seen_errors: set[str] = set()
-                environment_or_path_failure=_diagnose_failure(output,cwd,dataset).get('type') == 'dependency_platform_incompatible'
+                environment_or_path_failure=_diagnose_failure(output,cwd,dataset).get('type') in {'dependency_platform_incompatible','network_download'}
                 if (return_code not in {0, 124} or return_code == 0 and output_incomplete()) and source_repair_allowed() and not environment_or_path_failure:
                     try:
                         argv, cwd, item_env, output, isolated = await asyncio.to_thread(
@@ -4428,11 +4446,13 @@ async def execute_reproduction(job_id: str) -> None:
                 if tuning_selected:
                     verdict = 'tuned_result'  # Changed hyperparameters are not an exact paper-configuration reproduction.
                 from .metric_observations import evaluation_observations
+                from .runtime_outcome import process_exit_code
                 row = {
                     "dataset": dataset,
                     "return_code": return_code,
                     "metrics": metrics,
                     'metric_partition': evaluation_observations(output, METRIC_PATTERN)['partition'],
+                    'process_exit_code': process_exit_code(return_code, output),
                     "metric_key": metric_key,
                     "target": target,
                     "delta": None if functional else delta,

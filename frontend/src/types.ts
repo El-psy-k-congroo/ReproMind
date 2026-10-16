@@ -37,6 +37,7 @@ export interface DatasetResult {
   dataset: string
   metric_key?: string
   return_code: number
+  process_exit_code?: number
   metrics: Record<string, number>
   baseline_metrics?: Record<string, number>
   tuning_selected?: boolean

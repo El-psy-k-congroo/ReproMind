@@ -303,6 +303,7 @@ const displayedError = computed(() => {
           <div class="experiment-value">{{ metricValue(item.metrics[item.metric_key || 'accuracy'], item.metric_key || 'accuracy') }}</div>
           <small>{{ metricLabel(item.metric_key || 'accuracy') }} · 论文 {{ metricValue(item.target, item.metric_key || 'accuracy') }} · 差值 {{ item.delta === null ? '—' : item.delta.toFixed(4) }}</small>
           <small v-if="item.comparison_scope === 'functional_check'">{{ item.comparison_basis }}</small>
+          <small v-if="item.process_exit_code === 0 && item.return_code !== 0">进程退出码为 0，但日志报告了明确运行异常，按运行失败记录；原始退出码和日志均保留。</small>
           <p v-if="item.diagnosis.suggestion">{{ item.diagnosis.suggestion }}</p>
         </article>
       </div>
