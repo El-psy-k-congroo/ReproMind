@@ -57,14 +57,17 @@ def test_unreviewed_dependency_does_not_replan_or_install(tmp_path):
     assert not asyncio.run(engine._refresh_reviewed_dependencies(job,tmp_path))
 
 
-def test_ready_marker_does_not_skip_reviewed_dependency_install(tmp_path, monkeypatch):
+@pytest.mark.parametrize('cached_issue', [False, True])
+def test_ready_marker_does_not_skip_reviewed_dependency_install(tmp_path, monkeypatch, cached_issue):
     prefix=tmp_path/'env';prefix.mkdir()
     python=engine._environment_python(prefix);python.touch()
     (prefix/'.repromind-ready').write_text('old dependency snapshot')
     conda=tmp_path/'conda.exe';conda.touch()
     command=[str(python),'-m','pip','install','numpy==1.26.4']
-    job=SimpleNamespace(id='run',project_id='project',result_json={},events=[],logs='',
+    source=tmp_path/'source';source.mkdir()
+    job=SimpleNamespace(id='run',project_id='project',result_json={},events=[],logs='',execution_command={'pythonpath':str(source)},
         environment_spec={'prefix':str(prefix),'environment_name':'original','conda_executable':str(conda),
+            'host_compatibility':{'issues':[{'reason':'cached false rejection'}] if cached_issue else []},
             'recheck_on_run':True,'dependency_revision_pending_install':True,
             'create_commands':[['conda','create']], 'install_commands':[command]})
     calls=[]
@@ -73,13 +76,20 @@ def test_ready_marker_does_not_skip_reviewed_dependency_install(tmp_path, monkey
     async def refresh(*args):return False
     async def install(*args,**kwargs):calls.append(args[3]);return 0,'installed'
     async def advance(*args,**kwargs):pass
+    async def existing(job,spec):return {**spec,'python':'3.7.16'}
+    async def inspect(source,spec):
+        assert spec['python']=='3.7.16'
+        return {'issues':[]}
     monkeypatch.setattr(engine,'_refresh_reviewed_dependencies',refresh)
     monkeypatch.setattr(engine,'_named_environment_prefix',lambda *args:prefix)
     monkeypatch.setattr(engine,'_environment_owned_by_job',lambda *args:True)
     monkeypatch.setattr(engine,'_recover_environment_operation',install)
     monkeypatch.setattr(engine,'_run_environment_operation',install)
     monkeypatch.setattr(engine,'_advance',advance)
+    monkeypatch.setattr(engine,'_existing_environment_plan',existing)
+    monkeypatch.setattr(host_environment,'inspect_host_requirements',inspect)
     assert asyncio.run(engine._ensure_environment(Session(),job,tmp_path))==python
-    assert calls==[command]
+    assert calls[-1]==command
+    assert len(calls)==2 and '--dry-run' in calls[0]
     assert job.environment_spec['ready']
     assert not job.environment_spec['dependency_revision_pending_install']

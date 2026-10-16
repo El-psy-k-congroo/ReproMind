@@ -14,6 +14,7 @@ import httpx
 from packaging.requirements import Requirement, InvalidRequirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import parse_wheel_filename, InvalidWheelFilename
+from packaging.version import Version, InvalidVersion
 from .source_selection import entry_sources, native_path
 
 BINARY_PACKAGES = {'torch', 'torchvision', 'torchaudio', 'numpy', 'scipy', 'scikit-learn',
@@ -75,6 +76,26 @@ def wheel_support(filename, python, system=None, machine=None):
     return False
 
 
+def python_requirement_matches(requirement, python):
+    if not requirement:
+        return True
+    constraint = SpecifierSet(requirement)
+    if len(python.split('.')) >= 3:
+        return constraint.contains(python)
+    # A Conda major.minor plan is not an installed x.y.0 interpreter. Check
+    # whether some patch in this minor line can satisfy all declared bounds.
+    major, minor = map(int, python.split('.')[:2])
+    patches = {0}
+    for bound in constraint:
+        try:
+            release = Version(bound.version.removesuffix('.*')).release
+        except InvalidVersion:
+            continue
+        if release[:2] == (major, minor) and len(release) >= 3:
+            patches.update({max(0, release[2]-1), release[2], release[2]+1})
+    return any(constraint.contains(f'{major}.{minor}.{patch}') for patch in patches)
+
+
 def check_release(requirement, payload, python, system=None, machine=None):
     published = payload.get('urls', [])
     files = [row for row in published if not row.get('yanked')]
@@ -83,12 +104,13 @@ def check_release(requirement, payload, python, system=None, machine=None):
         # Older GPU libraries shipped Linux .so inside misleading py3-none-any wheels.
         files = [row for row in files if not row.get('filename','').endswith('-any.whl')]
     compatible = [row['filename'] for row in files if wheel_support(row.get('filename',''), python, system, machine)
-                  and (not row.get('requires_python') or SpecifierSet(row['requires_python']).contains(python + '.0'))]
+                  and python_requirement_matches(row.get('requires_python'), python)]
     candidates = ['3.11', '3.10', '3.12', '3.9', '3.8', '3.7']
     runtimes = [version for version in candidates if any(wheel_support(row.get('filename',''), version, system, machine)
-                and (not row.get('requires_python') or SpecifierSet(row['requires_python']).contains(version + '.0')) for row in files)]
+                and python_requirement_matches(row.get('requires_python'), version) for row in files)]
     return {'requirement': requirement, 'compatible_wheels': compatible[:4], 'compatible_python': runtimes,
-            'compatible': bool(compatible), 'available_files': [row.get('filename') for row in files][:80],
+            'compatible': bool(compatible), 'python_check_scope': 'actual_patch_version' if len(python.split('.')) >= 3 else 'minor_version_candidate',
+            'available_files': [row.get('filename') for row in files][:80],
             'release_state': 'missing' if not published else 'withdrawn' if all(row.get('yanked') for row in published) else 'published',
             'withdrawn_files': [{'filename':row.get('filename'), 'reason':str(row.get('yanked_reason') or '维护者未说明原因')[:400]}
                                 for row in published if row.get('yanked')][:20]}

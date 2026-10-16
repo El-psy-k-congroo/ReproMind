@@ -1261,7 +1261,7 @@ async def _existing_environment_plan(job, spec):
         actual = await probe_interpreter(existing_python)
         version = actual.get('python_version') or []
         if len(version)>=2 and all(type(value) is int for value in version[:2]):
-            return {**spec,'python':f'{version[0]}.{version[1]}',
+            return {**spec,'python':'.'.join(str(value) for value in version[:3]),
                     'existing_interpreter':actual,'create_commands':[],
                     'compatibility_note':'复用本项目已有解释器，依据其真实版本进行主机依赖预检，不按新环境默认版本误判。'}
     return spec
@@ -2867,8 +2867,6 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
     if await _refresh_reviewed_dependencies(job, workspace):
         await session.commit()
     spec = dict(job.environment_spec or {})
-    if (spec.get('host_compatibility') or {}).get('issues'):
-        raise RuntimeError('主机依赖预检未通过：' + '；'.join(row['reason'] + '：' + row['requirement'] for row in spec['host_compatibility']['issues']))
     prefix = Path(str(spec.get("prefix", ""))).resolve()
     conda = str(spec.get("conda_executable") or "")
     if not conda or not Path(conda).is_file():
@@ -2881,6 +2879,20 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
     marker = prefix / ".repromind-ready"
     if prefix.exists() and (not prefix.is_dir() or any(prefix.iterdir())) and not _environment_owned_by_job(job, prefix):
         raise ValueError(f"Conda 环境 {environment_name} 的项目归属无法验证，不会修改现有环境")
+    if (spec.get('host_compatibility') or {}).get('issues'):
+        source = Path(str((job.execution_command or {}).get('pythonpath') or '')).resolve()
+        if workspace.resolve() not in source.parents or not source.is_dir():
+            raise ValueError('依赖复检的作者源码路径未通过项目归属校验')
+        spec = await _existing_environment_plan(job, spec)
+        from .host_environment import inspect_host_requirements
+        check = await inspect_host_requirements(source, spec)
+        spec['host_compatibility'] = check
+        if not check.get('issues'):
+            spec.pop('platform_alert', None)
+        job.environment_spec = spec
+        await session.commit()
+        if check.get('issues'):
+            raise RuntimeError('主机依赖预检未通过：' + '；'.join(row['reason'] + '：' + row['requirement'] for row in check['issues']))
     approved_gpu_recovery=bool(spec.get('gpu_recovery_pending') and
                               (spec.get('gpu_environment_migration') or {}).get('approved'))
     if env_python.is_file() and (marker.is_file() or approved_gpu_recovery) and not spec.get('dependency_revision_pending_install'):

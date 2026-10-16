@@ -67,7 +67,7 @@ def test_existing_interpreter_abi_replaces_new_environment_default(tmp_path,monk
     python=tmp_path/'python.exe';python.touch()
     monkeypatch.setattr(engine,'_environment_python',lambda prefix:python)
     monkeypatch.setattr(engine,'_environment_owned_by_job',lambda *args:True)
-    async def actual(_):return {'python_version':[3,9],'platform':'win32','machine':'AMD64'}
+    async def actual(_):return {'python_version':[3,9,21],'platform':'win32','machine':'AMD64'}
     monkeypatch.setattr(engine,'probe_interpreter',actual)
     spec=asyncio.run(engine._existing_environment_plan(None,{'prefix':str(tmp_path),'python':'3.11','create_commands':[['conda','create','python=3.11']]}))
-    assert spec['python']=='3.9' and not spec['create_commands']
+    assert spec['python']=='3.9.21' and not spec['create_commands']
