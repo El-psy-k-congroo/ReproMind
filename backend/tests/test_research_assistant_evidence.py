@@ -55,6 +55,41 @@ def test_network_closure_keeps_short_class_names_loss_aliases_and_decode(tmp_pat
     assert '999' not in json.dumps(context['source_relevant_excerpts'])
 
 
+def test_execution_selected_network_outranks_other_imports_and_keeps_default_branch(tmp_path,monkeypatch):
+    job=fixture_job(tmp_path);source=Path(job.code_spec['source_path'])
+    job.code_spec['entrypoints']=['train.py']
+    job.execution_command['commands'][0]['argv']=['python','train.py','--arch','chosen']
+    (source/'train.py').write_text('from alternative import Other\nfrom chosen import Chosen\n')
+    (source/'alternative.py').write_text('\n'.join(f'class Other{i}:\n    def forward(self,x):\n        return x + {i}' for i in range(5)))
+    (source/'chosen.py').write_text('class Chosen:\n    def __init__(self, residual=False):\n        self.residual=residual\n    def forward(self,x):\n        if self.residual:\n            x=x+1\n        return x\n')
+    class Session:
+        async def scalars(self,*_):return SimpleNamespace(all=lambda:[job])
+        async def scalar(self,*_):return job
+    monkeypatch.setattr(copilot,'_safe_workspace',lambda _:tmp_path)
+    project=SimpleNamespace(id=job.project_id,name='Example',description='',artifacts=[])
+    context=asyncio.run(copilot._context(Session(),project,'当前网络的forward机制是什么，不运行。',job.id))
+    packet=context['source_task_evidence']['named_implementations'][0]
+    assert packet['symbol']=='Chosen.forward'
+    assert 'residual=False' in packet['constructor_signature_from_static_ast']
+    assert 'if self.residual' in packet['code']
+
+
+def test_question_control_flag_retrieves_its_calculation_block():
+    from app.services.source_calculations import calculation_packets
+    body='''def train(x):
+    if args.patchmix_prob > 0:
+        weight = draw()
+        left, right = region(weight)
+        x[left:right] = alternate[left:right]
+        weight = 1 - (right-left)/len(x)
+        loss = weight * loss_a + (1-weight) * loss_b
+    return loss
+'''
+    packets=calculation_packets(body,'解释PatchMix的裁剪和面积校正','train.py')
+    assert packets and 'weight = 1 - (right-left)/len(x)' in packets[0]['code']
+    assert 'if args.patchmix_prob' in packets[0]['code']
+
+
 def test_search_space_reads_real_flags_and_current_argv_not_fixed_rates(tmp_path):
     job = fixture_job(tmp_path)
     plan = tuning.build_tuning_plans(job)[0]

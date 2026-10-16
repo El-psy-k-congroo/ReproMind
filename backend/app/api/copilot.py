@@ -167,7 +167,8 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
         'dataset_results_count': job.get('dataset_results_count'),
         'dataset_result_rows_complete': min(12, len(job.get('dataset_results') or job.get('dataset_results_preview') or [])) == job.get('dataset_results_count'),
         'dataset_results': rows(job.get('dataset_results') or job.get('dataset_results_preview') or [],
-            ['dataset', 'metric_key', 'metrics', 'target', 'delta', 'verdict', 'tuning_selected', 'baseline_metrics']),
+            ['dataset', 'metric_key', 'metrics', 'target', 'delta', 'verdict', 'tuning_selected', 'baseline_metrics',
+             'comparison_scope', 'comparison_basis']),
         'tuning_attempts_total': job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempt_rows_complete': min(12, len(job.get('tuning_attempts') or [])) == job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempts': rows(job.get('tuning_attempts') or [],
@@ -903,7 +904,8 @@ def _workspace_context(context, job, workspace, question, terms,
                                             'content':path.read_text(encoding='utf-8',errors='replace')[:2600]}
                                            for label,path in list(configs.items())[:2]]
         selected_files = entry_sources(sources, question_entries[:1])
-        from ..services.source_calculations import calculation_packets, numbered_code
+        from ..services.source_calculations import calculation_packets, numbered_code, configured_model_names
+        model_names = configured_model_names(job.execution_command)
         implementation, named_implementation, structure, named_functions, optimizers, calculations = [], [], [], [], [], []
         network_methods={'forward','call'}
         if re.search(r'编码|解码|encoder|decoder|encode|decode',question,re.I):
@@ -933,7 +935,14 @@ def _workspace_context(context, job, workspace, question, terms,
                         if isinstance(method,ast.FunctionDef) and method.name.lstrip('_') in network_methods:
                             begin = method.lineno-1; end = min(len(lines),method.end_lineno,begin+45)
                             named_implementation.append({'file':path.relative_to(sources).as_posix(),'symbol':node.name+'.'+method.name,
-                                'line':method.lineno,'code':numbered_code(lines,begin,end)})
+                                'line':method.lineno,'code':numbered_code(lines,begin,end),
+                                'constructor_signature_from_static_ast':next((node.name+'('+ast.unparse(ctor.args)+')'
+                                    for ctor in node.body if isinstance(ctor,ast.FunctionDef) and ctor.name=='__init__'),''),
+                                'construction_sites_from_static_ast':[
+                                    {'line':call.lineno,'expression':ast.unparse(call)[:600]}
+                                    for call in ast.walk(tree) if isinstance(call,ast.Call) and
+                                    (call.func.id if isinstance(call.func,ast.Name) else call.func.attr if isinstance(call.func,ast.Attribute) else '')==node.name
+                                ][:3]})
                 if isinstance(node, (ast.Assign,ast.AnnAssign)):
                     targets = node.targets if isinstance(node,ast.Assign) else [node.target]
                     call_name=ast.unparse(node.value.func) if isinstance(node.value,ast.Call) else ''
@@ -946,7 +955,9 @@ def _workspace_context(context, job, workspace, question, terms,
                         optimizers.append({'file':path.relative_to(sources).as_posix(),'line':node.lineno,
                             'code':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(begin,end))})
         task_evidence['loss_assignments'] = implementation[:5]
-        named_implementation.sort(key=lambda row:-sum(token in row['symbol'].lower() for token in terms if token not in {'class ','def forward','model','train','epoch'}))
+        named_implementation.sort(key=lambda row:(
+            -sum(name in config_key(row['file']+' '+row['symbol']) for name in model_names),
+            -sum(token in row['symbol'].lower() for token in terms if token not in {'class ','def forward','model','train','epoch'})))
         task_evidence['named_implementations'] = named_implementation[:3]
         task_evidence['optimizer_assignments'] = optimizers[:3]
         task_evidence['question_calculations_not_execution_proof'] = calculations[:5]
@@ -1620,6 +1631,9 @@ async def stream_answer(
                 "引用代码必须逐字来自带行号的当前源码片段；不允许凭记忆编造代码后标注文件行号。"
                 "方法问题须直接解释所问机制、公式及其代码对应，不以性能猜测或设备模板替代。"
                 "解释计算时逐项核对当前源码的运算顺序、分支和激活位置；不能凭记忆拼出不同的总公式。"
+                "方法解释优先按源码的赋值顺序逐步说明，不自行合并成总公式；系数必须和其所乘表达式一一对应。"
+                "constructor_signature_from_static_ast记录默认开关，construction_sites_from_static_ast记录静态传参；"
+                "必须结合两者及本次命令核对可选分支。条件成立才执行的操作不得写成必然执行，也不能把内部残差移到外部激活之后。"
                 "原文公式无法可靠对应时，给出当前源码中的逐行计算步骤并解释变量，不编造等价公式。"
                 "question_calculations_not_execution_proof包含所问指标和预处理的原文，即使函数名未提到指标也应读取。"
                 "线性层输入维数只是中间特征宽度，不能当作原始输入元素数；未核验全部输入维度、序列长度和存储格式时不计算压缩率。"
@@ -1636,6 +1650,7 @@ async def stream_answer(
                 "历史 assistant 回答可能错误，不能用其替代当前 verified_run_facts；只根据当前证据纠正历史错误。"
                 "dataset_result_rows_complete=false 只表示上下文截短，不表示未运行或指标不存在。"
                 "复现结论必须逐项读取当前 dataset_results 的 metrics/verdict；不要重复历史回答中的缺失结论。"
+                "comparison_scope=functional_check表示本轮仅功能运行，论文指标仅参考，不能作性能失败或达标判定。"
                 "tuning_attempts_total=0 时没有当前实验的调参证据，不可引用别的实验或历史对话中的搜索次数和最佳值。"
                 "性能问题必须直接分析 verified_performance_comparison，不能用 GPU 是否可用或当前有无训练的模板代替回答。"
                 "先列出所选实验和相关历史实验同数据集同指标的实际值、差值及短ID，再比较已核验配置、轮数和耗时。"
