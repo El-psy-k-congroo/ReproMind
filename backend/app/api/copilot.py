@@ -893,12 +893,14 @@ def _workspace_context(context, job, workspace, question, terms,
                                             'content':path.read_text(encoding='utf-8',errors='replace')[:2600]}
                                            for label,path in list(configs.items())[:2]]
         selected_files = entry_sources(sources, question_entries[:1])
-        implementation, named_implementation, structure, named_functions, optimizers = [], [], [], [], []
+        from ..services.source_calculations import calculation_packets, numbered_code
+        implementation, named_implementation, structure, named_functions, optimizers, calculations = [], [], [], [], [], []
         network_methods={'forward','call'}
         if re.search(r'编码|解码|encoder|decoder|encode|decode',question,re.I):
             network_methods.update({'encode','decode'})
         for path in selected_files:
             body = path.read_text(encoding='utf-8',errors='replace'); lines = body.splitlines()
+            calculations.extend(calculation_packets(body, question, path.relative_to(sources).as_posix()))
             try: tree = ast.parse(body)
             except SyntaxError: continue
             for node in ast.walk(tree):
@@ -921,7 +923,7 @@ def _workspace_context(context, job, workspace, question, terms,
                         if isinstance(method,ast.FunctionDef) and method.name.lstrip('_') in network_methods:
                             begin = method.lineno-1; end = min(len(lines),method.end_lineno,begin+45)
                             named_implementation.append({'file':path.relative_to(sources).as_posix(),'symbol':node.name+'.'+method.name,
-                                'line':method.lineno,'code':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(begin,end))[:2200]})
+                                'line':method.lineno,'code':numbered_code(lines,begin,end)})
                 if isinstance(node, (ast.Assign,ast.AnnAssign)):
                     targets = node.targets if isinstance(node,ast.Assign) else [node.target]
                     call_name=ast.unparse(node.value.func) if isinstance(node.value,ast.Call) else ''
@@ -937,6 +939,7 @@ def _workspace_context(context, job, workspace, question, terms,
         named_implementation.sort(key=lambda row:-sum(token in row['symbol'].lower() for token in terms if token not in {'class ','def forward','model','train','epoch'}))
         task_evidence['named_implementations'] = named_implementation[:3]
         task_evidence['optimizer_assignments'] = optimizers[:3]
+        task_evidence['question_calculations_not_execution_proof'] = calculations[:5]
         structure.sort(key=lambda row:-sum(token in (row['attribute']+' '+row['class']).lower() for token in terms))
         seen_structure=set();unique_structure=[]
         for row in structure:
@@ -1606,6 +1609,10 @@ async def stream_answer(
                 "优先引用 paper_relevant_excerpts 和 source_relevant_excerpts 的文件证据；没有证据时明确说未知。"
                 "引用代码必须逐字来自带行号的当前源码片段；不允许凭记忆编造代码后标注文件行号。"
                 "方法问题须直接解释所问机制、公式及其代码对应，不以性能猜测或设备模板替代。"
+                "解释计算时逐项核对当前源码的运算顺序、分支和激活位置；不能凭记忆拼出不同的总公式。"
+                "原文公式无法可靠对应时，给出当前源码中的逐行计算步骤并解释变量，不编造等价公式。"
+                "question_calculations_not_execution_proof包含所问指标和预处理的原文，即使函数名未提到指标也应读取。"
+                "线性层输入维数只是中间特征宽度，不能当作原始输入元素数；未核验全部输入维度、序列长度和存储格式时不计算压缩率。"
                 "上下文截短仅表示未展示，不得据此断言仓库缺实现、归档无公开测试数据或下载失败。"
                 "job.status、job.stage 是当前状态；recent_events 是历史，不得据此把已结束的阶段说成正在进行。"
                 "hardware_plan 仅代表主机硬件探测，不代表当前 Conda 环境安装了 CUDA 版框架；"
