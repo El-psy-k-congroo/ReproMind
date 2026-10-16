@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { runDatasetScope } from '../runScope'
 import { trainingDeviceLabel } from '../gpuEvidence'
+import { baselineComparison } from '../baselineComparison'
 import type { ReproductionActivity, ReproductionRun, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun; approving?: boolean }>()
@@ -129,17 +130,10 @@ const metricClaims = computed(() => claimResults.value.filter(item => item.datas
 const contextualClaims = computed(() => claimResults.value.filter(item => !item.dataset))
 const baselineClaims = computed(() => metricClaims.value.filter(item => item.scope !== 'tuned'))
 const supportedCount = computed(() => baselineClaims.value.filter(item => item.supported).length)
-const baselineComparisons = computed(() => datasetResults.value.filter(item => {
-  const value = (item.baseline_metrics || (!item.tuning_selected ? item.metrics : {}))[item.metric_key || 'accuracy']
-  return item.return_code === 0 && typeof value === 'number' && Number.isFinite(value)
-    && typeof item.target === 'number' && Number.isFinite(item.target)
-}))
-const baselineWithinTolerance = computed(() => baselineComparisons.value.filter(item => {
-  const metric = item.metric_key || 'accuracy'
-  const actual = (item.baseline_metrics || item.metrics)[metric]!
-  return ['loss', 'mae', 'mse', 'rmse'].includes(metric) ? actual <= item.target! + .03 : actual >= item.target! - .03
-}).length)
+const baselineComparisons = computed(() => datasetResults.value.filter(item => baselineComparison(item) !== null))
+const baselineWithinTolerance = computed(() => baselineComparisons.value.filter(item => baselineComparison(item) === 'matched').length)
 const claimLabel = (claim: { supported: boolean; status: string }) => claim.supported ? '达到指标容差' :
+  claim.status === 'functional_completed' ? '功能运行完成' :
   claim.status === 'deviated' ? '指标有偏差' : claim.status === 'failed' ? '运行失败' : '尚未验证'
 const completeCount = computed(() => datasetResults.value.filter(item => item.return_code === 0 && Object.keys(item.metrics).length).length)
 const targetCount = computed(() => runDatasetScope(props.run).length)
@@ -308,6 +302,7 @@ const displayedError = computed(() => {
           <div class="experiment-card-title"><strong>{{ item.dataset }}</strong><span>{{ item.verdict === 'matched' ? '✓ 指标在容差内' : item.verdict === 'result_produced' ? '△ 已产生指标，目标待核' : item.verdict === 'metric_missing' ? '△ 缺少指标' : item.verdict === 'deviated' ? '△ 指标超出容差' : item.verdict === 'tuned_result' ? '△ 调参结果，非原配置' : item.verdict === 'configuration_unverified' ? '△ 配置待核' : item.verdict === 'dataset_version_unverified' ? '△ 版本待核' : item.return_code === 0 ? '△ 待核验' : '✗ 未完成' }}</span></div>
           <div class="experiment-value">{{ metricValue(item.metrics[item.metric_key || 'accuracy'], item.metric_key || 'accuracy') }}</div>
           <small>{{ metricLabel(item.metric_key || 'accuracy') }} · 论文 {{ metricValue(item.target, item.metric_key || 'accuracy') }} · 差值 {{ item.delta === null ? '—' : item.delta.toFixed(4) }}</small>
+          <small v-if="item.comparison_scope === 'functional_check'">{{ item.comparison_basis }}</small>
           <p v-if="item.diagnosis.suggestion">{{ item.diagnosis.suggestion }}</p>
         </article>
       </div>

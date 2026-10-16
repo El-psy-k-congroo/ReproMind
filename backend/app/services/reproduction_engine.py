@@ -3915,6 +3915,15 @@ def _claim_results(
     for item in dataset_results:
         dataset = str(item["dataset"])
         metric_key = str(item.get("metric_key") or "accuracy")
+        if item.get('comparison_scope') == 'functional_check':
+            actual = (item.get('metrics') or {}).get(metric_key)
+            claims.append({
+                'claim': f'{dataset} 功能运行与指标产出', 'dataset': dataset, 'scope': 'functional',
+                'supported': False,
+                'status': 'failed' if item.get('return_code', 0) != 0 else 'functional_completed' if actual is not None else 'unverified',
+                'evidence': f'本轮 {metric_key}={actual}；按用户要求执行功能检查，不作论文性能达标或偏离判定；完整训练协议、多种子及论文结论仍未验证',
+            })
+            continue
         baseline_known = bool(item.get('baseline_verdict'))
         actual = ((item.get('baseline_metrics') if baseline_known else item.get('metrics')) or {}).get(metric_key)
         target = item.get("target")
@@ -4001,6 +4010,8 @@ def _write_reproduction_report(job: ReproductionJob, workspace: Path) -> Path:
             )
     else:
         lines.append("| - | - | - | - | - | - | 未产生实验结果 |")
+    if any(item.get('comparison_scope') == 'functional_check' for item in dataset_results):
+        lines.extend(['', '本轮包含用户明确要求的功能检查。论文数值仅作参考，不据此判断性能达标或触发恢复调参。'])
     lines.extend([
         "",
         "## 论文里的哪些结论被复现了？",
@@ -4391,12 +4402,16 @@ async def execute_reproduction(job_id: str) -> None:
                 from .metric_contract import LOWER, target_tolerance
                 lower_is_better = metric_key in LOWER
                 tolerance, comparison_basis = target_tolerance(job.paper_spec or {}, dataset, metric_key)
+                from .performance_scope import comparison_scope, FUNCTIONAL_BASIS
+                scope = comparison_scope(job.paper_spec, job.execution_mode)
+                functional = scope == 'functional_check'
                 meets_target = actual is not None and target is not None and (
                     actual <= target + tolerance if lower_is_better else actual >= target - tolerance
                 )
                 verdict = (
                     "failed" if return_code != 0 else
                     "metric_missing" if actual is None else
+                    "result_produced" if functional else
                     "matched" if meets_target else
                     "deviated" if target is not None else "result_produced"
                 )
@@ -4416,8 +4431,9 @@ async def execute_reproduction(job_id: str) -> None:
                     "metrics": metrics,
                     "metric_key": metric_key,
                     "target": target,
-                    "delta": delta,
-                    'comparison_tolerance': tolerance, 'comparison_basis': comparison_basis,
+                    "delta": None if functional else delta,
+                    'comparison_scope': scope,
+                    'comparison_tolerance': tolerance, 'comparison_basis': FUNCTIONAL_BASIS if functional else comparison_basis,
                     "verdict": verdict,
                     "diagnosis": _diagnose_failure(output, cwd, dataset) if return_code else {},
                     "wall_time_seconds": round(time.perf_counter() - experiment_started, 2),
@@ -4466,6 +4482,11 @@ async def execute_reproduction(job_id: str) -> None:
             unplanned = list(command.get("unplanned_datasets") or [])
             reproduction_success = not skipped and not unplanned and all_executed and metrics_complete and all(
                 item["verdict"] == "matched" for item in dataset_results
+            )
+            from .performance_scope import comparison_scope
+            functional = comparison_scope(job.paper_spec, job.execution_mode) == 'functional_check'
+            functional_success = functional and all_executed and metrics_complete and not skipped and not unplanned and all(
+                item['metrics'].get(item['metric_key']) is not None for item in dataset_results
             )
             claims = _claim_results(job.paper_spec or {}, dataset_results, skipped)
             claims.extend({
@@ -4521,9 +4542,11 @@ async def execute_reproduction(job_id: str) -> None:
                 "user_action": user_action,
                 "command": command.get("display", ""),
                 "finished_at": datetime.now(timezone.utc).isoformat(),
-                "evidence_level": "syntax_smoke_test" if job.execution_mode == "smoke" else "full_dataset_experiment",
+                "evidence_level": "syntax_smoke_test" if job.execution_mode == "smoke" else "functional_experiment" if functional else "full_dataset_experiment",
+                "functional_success": functional_success,
                 "reproduction_success": reproduction_success,
                 "conclusion": (
+                    '本轮按用户要求完成功能运行并产出指标；论文数值仅供参考，尚未检验完整训练协议下的论文性能。' if functional_success else
                     f"本次选择的 {len(dataset_results)} 组数据集基线指标达到设定容差；其他论文主张、消融及跨种子结果未由本次运行验证。" if reproduction_success else
                     f"作者配置基线 {sum(item.get('baseline_verdict', item['verdict']) == 'matched' for item in dataset_results)}/{len(dataset_results)} 组达到指标容差；调参结果另列。未验证不代表论文结论错误。"
                 ),
@@ -4534,6 +4557,7 @@ async def execute_reproduction(job_id: str) -> None:
                 _write_reproduction_report(job, workspace)
                 message = (
                     "安全试运行完成；这不等于论文指标已复现" if job.execution_mode == "smoke" else
+                    "功能实验完成并产出指标；论文性能尚未验证" if functional_success else
                     "全部计划实验已执行并生成复现报告" if reproduction_success else
                     "实验已完成并产出指标；部分指标偏离当前论文目标" if deviated_rows else
                     "实验执行完成，但指标证据不完整；已在报告中说明"

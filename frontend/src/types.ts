@@ -44,12 +44,15 @@ export interface DatasetResult {
   target: number | null
   delta: number | null
   verdict: string
+  baseline_verdict?: string
+  comparison_scope?: 'functional_check' | 'paper_baseline'
+  comparison_basis?: string
   wall_time_seconds?: number
   diagnosis: Record<string, string>
 }
 
 export interface ClaimResult {
-  scope?: 'baseline' | 'tuned'
+  scope?: 'baseline' | 'tuned' | 'functional'
   claim: string
   dataset: string
   supported: boolean
