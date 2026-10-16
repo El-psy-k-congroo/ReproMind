@@ -46,6 +46,32 @@ def test_rerun_rejects_unplanned_dataset(tmp_path: Path):
                            {"prefix": str(tmp_path / "conda")}, ["Missing"])
 
 
+def test_rerun_retains_documented_cli_and_rebinds_custom_output(tmp_path):
+    source = tmp_path / 'branches' / 'fresh' / 'source'
+    source.mkdir(parents=True)
+    old = tmp_path / 'sources' / 'old'
+    (source / 'main.py').write_text(
+        "import argparse\np = argparse.ArgumentParser()\n"
+        "p.add_argument('--config')\np.add_argument('--experiment-home')\n"
+        "p.add_argument('--sample', action='store_true')\n")
+    (source / 'example.yml').write_text('data:\n  dataset: Example\n')
+    (source / 'README.md').write_text(
+        'python main.py --config example.yml --experiment-home {PROJECT_PATH} --sample\n')
+    prior = ['python', 'main.py', '--config', str(old / 'example.yml'),
+             '--experiment-home', str(tmp_path / 'runs' / 'prior' / 'output'), '--sample']
+    base = SimpleNamespace(id='prior', workspace_path=str(tmp_path),
+        execution_command={'entrypoint_candidates': ['main.py'], 'pythonpath': str(old)},
+        result_json={'dataset_results': [{'dataset': 'Example', 'baseline_argv': prior}]},
+        paper_spec={'datasets': ['Example'], 'execution_phase': 'sampling'},
+        dataset_spec={'dataset_not_required_for_scope': True})
+    run = tmp_path / 'runs' / 'fresh'
+    planned = _fresh_run_command(base, source, run, {'prefix': str(tmp_path / 'conda')}, ['Example'])
+    command = planned['commands'][0]
+    assert command['argv'][command['argv'].index('--experiment-home') + 1] == str(run / 'output')
+    assert '--sample' in command['argv']
+    assert command['isolated_output_bindings'] == {'experiment-home': str(run / 'output')}
+
+
 def test_cli_rerun_preview_resolves_author_file_variant_without_changing_source(tmp_path):
     source = tmp_path / 'source'
     data = source / 'data'

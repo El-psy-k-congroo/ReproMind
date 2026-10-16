@@ -27,7 +27,7 @@ from ..models import ReproductionJob, ReproductionStatus
 from ..services.reproduction_engine import (
     _environment_python, _named_environment_prefix, _environment_owned_by_job, _align_dataset_commands,
     _hardware_plan, _infer_python_dependencies, _execution_command,
-    _native_path,
+    _native_path, _repository_manifest,
     execute_reproduction, has_active_work,
 )
 from .models_catalog import validate_model
@@ -418,8 +418,11 @@ def _fresh_run_command(base: ReproductionJob, source: Path, run_workspace: Path,
     entrypoints = original.get("entrypoint_candidates") or []
     if not entrypoints:
         raise HTTPException(status_code=409, detail="原实验没有可验证的训练入口")
+    # A fresh run still needs the author's documented flags and output roles.
+    # Keep the selected entries; rescanning usage must not switch experiments.
+    manifest = {**_repository_manifest(source), "entrypoints": entrypoints}
     planned = _execution_command(
-        source, {"entrypoints": entrypoints}, "full", environment,
+        source, manifest, "full", environment,
         base.paper_spec or {}, base.dataset_spec or {}, run_workspace,
     )
     requested = {label.casefold() for label in datasets if label.strip()}
