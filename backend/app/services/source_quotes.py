@@ -7,26 +7,43 @@ def checked_source_quotes(answer, context):
     def collect(value):
         if isinstance(value, dict):
             if value.get('file'):
-                for key in ('code','excerpt'):
-                    if isinstance(value.get(key),str):
-                        packets.append(value[key])
+                for key in ('code','excerpt','excerpts'):
+                    values=value.get(key)
+                    values=[values] if isinstance(values,str) else values if isinstance(values,list) else []
+                    packets.extend((str(value['file']),packet) for packet in values if isinstance(packet,str))
             for child in value.values(): collect(child)
         elif isinstance(value,list):
             for child in value: collect(child)
     collect(context)
-    numbered = []
-    for packet in packets:
-        numbered.append({int(m[1]):m[2].rstrip() for m in re.finditer(r'(?m)^L(\d+): ?(.*)$',packet)})
+    by_file={};conflicts=set();plain=[]
+    for filename,packet in packets:
+        lines=by_file.setdefault(filename,{})
+        for match in re.finditer(r'(?m)^L(\d+): ?(.*)$',packet):
+            number=int(match[1]);line=match[2].rstrip()
+            if number in lines and lines[number]!=line:conflicts.add((filename,number))
+            lines[number]=line
+        if not re.search(r'(?m)^L\d+:',packet):plain.append(packet)
+    for filename,number in conflicts:by_file[filename].pop(number,None)
+    # Loss and optimizer statements may be supplied as adjacent packets. Merge
+    # only consecutive line numbers belonging to the same exact file identity.
+    for lines in by_file.values():
+        chunk=[];previous=None
+        for number,line in sorted(lines.items()):
+            if previous is not None and number!=previous+1:
+                plain.append('\n'.join(chunk));chunk=[]
+            chunk.append(line);previous=number
+        if chunk:plain.append('\n'.join(chunk))
     rejected = 0
     def verify(match):
         nonlocal rejected
         block = match[1].strip('\n')
         cited = list(re.finditer(r'(?m)^L(\d+): ?(.*)$',block))
         if cited:
-            valid = any(all(lines.get(int(row[1])) == row[2].rstrip() for row in cited) for lines in numbered)
+            valid = any(all(lines.get(int(row[1])) == row[2].rstrip() for row in cited) for lines in by_file.values())
             valid = valid and len(cited) == len([line for line in block.splitlines() if line.strip()])
+            valid = valid and [int(row[1]) for row in cited]==sorted({int(row[1]) for row in cited})
         else:
-            valid = any(block in re.sub(r'(?m)^L\d+: ?', '',packet) for packet in packets)
+            valid = any(block in packet for packet in plain)
         if valid: return match[0]
         rejected += 1
         return '> 此处源码引文与本次读取的原文不一致，已移除；不能据此判断代码实现。'
