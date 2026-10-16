@@ -3623,6 +3623,23 @@ async def _download_small_datasets(
     data_dir.mkdir(parents=True, exist_ok=True)
     for dataset in datasets:
         _raise_if_paused(job.id)
+        from .author_dataset_paths import torchvision_roots
+        execution=job.execution_command or {}
+        selected=next((row for row in execution.get('commands',[]) if
+            str(row.get('dataset','')).upper().replace('-','')==dataset),execution)
+        loader_roots=await asyncio.to_thread(torchvision_roots,
+            Path(str(selected.get('pythonpath') or execution.get('pythonpath') or selected.get('cwd') or workspace)),
+            execution.get('entrypoint_candidates') or (getattr(job,'code_spec',None) or {}).get('entrypoints') or [],
+            Path(str(selected.get('cwd') or execution.get('cwd') or workspace)),dataset,workspace)
+        if len(loader_roots)>1:
+            raise ValueError(f'{dataset} 作者入口声明多个数据根目录，需要明确当前命令的输入目录；未猜测或启动训练')
+        data_dir=Path(loader_roots[0]['path']) if loader_roots else data_root
+        data_dir.mkdir(parents=True,exist_ok=True)
+        if loader_roots:
+            spec=dict(job.dataset_spec or {})
+            spec['author_loader_roots']={**spec.get('author_loader_roots',{}),dataset:loader_roots[0]}
+            job.dataset_spec=spec
+            await session.commit()
         await _advance(session, job, 'data_downloading', 90, f'Data Agent 正在获取 {dataset}；尚未进入训练')
         from .torchvision_downloads import metadata_script, parse_metadata, fetch_resources
         metadata_code, metadata_output = await _run_process(
@@ -3633,7 +3650,13 @@ async def _download_small_datasets(
             verified = (job.dataset_spec or {}).get('verified_builtin_downloads', {}).get(dataset) or {}
             if verified.get('url') and resources and resources[0]['checksum'] == 'md5:' + str(verified.get('expected_md5')):
                 resources[0]['urls'].insert(0, verified['url'])
-            await fetch_resources(session, job, workspace, dataset, data_dir, resources, _raise_if_paused)
+            await fetch_resources(session, job, workspace, dataset, data_dir, resources, _raise_if_paused,
+                                  cache_root=data_root)
+            if loader_roots:
+                spec=dict(job.dataset_spec or {})
+                spec['author_loader_roots'][dataset]={**loader_roots[0], 'resources':resources}
+                job.dataset_spec=spec
+                await session.commit()
         statements = ["import os", "from torchvision import datasets", "root=os.environ['REPROMIND_DATA_DIR']",
             f"datasets.{dataset}(root=root, train=True, download=True)",
             f"datasets.{dataset}(root=root, train=False, download=True)",

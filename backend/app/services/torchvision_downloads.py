@@ -2,6 +2,8 @@
 import json
 import asyncio
 import re
+import shutil
+import time
 from urllib.parse import quote
 from pathlib import Path
 import httpx
@@ -64,15 +66,34 @@ def parse_metadata(output):
     return json.loads(line)
 
 
-async def fetch_resources(session, job, workspace, dataset, root, resources, check_pause):
+async def fetch_resources(session, job, workspace, dataset, root, resources, check_pause, cache_root=None):
     for resource in resources:
         relative = Path(resource['directory']) / resource['filename']
         if relative.is_absolute() or '..' in relative.parts: raise ValueError('数据包返回的路径越界')
         path = root / relative
         checksum = resource['checksum']
+        if path.is_symlink(): raise ValueError('数据包目标不能是符号链接')
         if path.is_file():
-            verify_file(path, checksum)
-            continue
+            try:
+                verify_file(path, checksum)
+                continue
+            except ValueError:
+                # Keep the failed author's partial archive for diagnosis; it
+                # must not block reuse of an already verified complete archive.
+                invalid=path.with_name(path.name+f'.repromind-invalid-{time.time_ns()}')
+                path.rename(invalid)
+                resource['invalid_archive_preserved']=str(invalid)
+        cached=Path(cache_root)/relative if cache_root is not None else None
+        if cached and cached!=path and cached.is_file() and not cached.is_symlink():
+            try:verify_file(cached,checksum)
+            except ValueError:pass
+            else:
+                check_pause(job.id)
+                path.parent.mkdir(parents=True,exist_ok=True)
+                await asyncio.to_thread(shutil.copy2,cached,path)
+                verify_file(path,checksum)
+                resource['verified_cache_reused']=str(cached)
+                continue
         mirrors = await public_archive_mirrors(dataset,resource['filename']) if resource['filename'].endswith(('.tar.gz','.tgz','.zip')) else []
         known = VERIFIED_ARCHIVES.get(resource['filename'])
         if known and checksum == known[0]: mirrors.insert(0,known[1])
