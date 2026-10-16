@@ -43,7 +43,7 @@ def test_status_log_request_shows_selected_run_tail_without_claiming_success(tmp
     log=tmp_path/'runs'/'selected'/'telemetry'/'example-original.log'
     log.parent.mkdir(parents=True);log.write_text('>>> Epoch 3\n[train] loss = 0.3\nlast raw progress marker\n')
     job=SimpleNamespace(id='selected',status=ReproductionStatus.executing,current_stage='executing',
-        message='Execution Agent 正在运行 Example（1/1）',result_json={},
+        message='Repair Agent 正在进行第二步纠错',result_json={},
         execution_command={'commands':[{'dataset':'Example'}]})
     class Session:
         async def scalar(self,*args):return job
@@ -51,3 +51,4 @@ def test_status_log_request_shows_selected_run_tail_without_claiming_success(tmp
     answer=asyncio.run(copilot._status_answer(Session(),SimpleNamespace(id='p'),'selected','当前进度和最近日志，是否卡住？'))
     assert 'last raw progress marker' in answer and 'example-original.log' in answer
     assert 'epoch 3' in answer and '不能宣布运行成功' in answer
+    assert '正在运行的数据集是 Example' in answer

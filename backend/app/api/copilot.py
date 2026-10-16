@@ -670,6 +670,8 @@ async def _status_answer(db: AsyncSession, project: Project, run_id: str, questi
     series = (await asyncio.to_thread(read_job_telemetry, workspace, job.id))["series"] if workspace else []
     current = re.search(r"正在运行\s+(.+?)（\d+/\d+）", job.message or "")
     dataset = current.group(1) if status == "executing" and current else ""
+    if not dataset and status == 'executing' and len(set(planned)) == 1:
+        dataset = planned[0]
     if not dataset and series and status != 'executing':
         dataset = str(max(series, key=lambda item: item.get("updated_at") or 0).get("dataset") or "")
         dataset = next((name for name in planned if _same_dataset(name, dataset)), dataset)
