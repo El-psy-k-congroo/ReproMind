@@ -2206,7 +2206,7 @@ async def prepare_reproduction(job_id: str) -> None:
             job.environment_spec = {**job.environment_spec, 'host_compatibility': host_check}
             if host_check['issues']:
                 job.environment_spec = {**job.environment_spec, 'platform_alert': {
-                    'title': '当前主机与作者依赖不兼容', 'issues': host_check['issues'],
+                    'title': '作者依赖与当前运行条件需要核验', 'issues': host_check['issues'],
                     'recommended_python': host_check.get('recommended_python'),
                     'reason': '需要联合核对 Python、操作系统、CUDA 和源码 API；不会直接安装不兼容依赖或静默放宽作者版本。'}}
             hardware = job.environment_spec.get("hardware_plan", {})
