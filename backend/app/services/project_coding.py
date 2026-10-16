@@ -41,11 +41,36 @@ async def _bounded_json(router, role, system, prompt, **kwargs):
         raise ValueError(f'{getattr(role,"value",role)} 模型阶段超过 {budget} 秒；未修改源码') from exc
 
 
-async def _review_json(*args, **kwargs):
-    try:
-        return await _bounded_json(*args, **kwargs)
-    except ValueError as exc:
-        return SimpleNamespace(data={},usage={},model='未取得审查响应',error=str(exc))
+class ReviewUnavailable(ValueError):
+    """An incomplete review is not evidence that the candidate needs rewriting."""
+
+
+async def _review_json(router, role, system, prompt, **kwargs):
+    deadline = asyncio.get_running_loop().time() + kwargs['timeout_seconds']
+    usage = 0
+    for attempt in range(2):
+        remaining = max(1, int(deadline - asyncio.get_running_loop().time()))
+        try:
+            result = await _bounded_json(router, role,
+                system + '只输出结论 JSON，不输出分析、源码或长篇解释。issues 最多4条，每条不超过160字；没有缺陷返回空数组。',
+                prompt, **{**kwargs, 'timeout_seconds': remaining,
+                            'max_tokens': max(kwargs.get('max_tokens', 0), 1600 if attempt == 0 else 2400)})
+        except ValueError as exc:
+            result = SimpleNamespace(data={}, usage={}, model='未取得审查响应', error=str(exc))
+        usage += int(result.usage.get('total_tokens', 0))
+        result.usage = {**result.usage, 'total_tokens': usage}
+        result.review_attempts = attempt + 1
+        findings = result.data.get('issues')
+        valid = (not result.error and type(result.data.get('fulfilled')) is bool
+                 and isinstance(findings, list) and all(isinstance(value, str) and value.strip() for value in findings)
+                 and (result.data['fulfilled'] or bool(findings)))
+        if valid:
+            return result
+        if not result.error:
+            result.error = '审查返回结构不完整或没有提供未通过的具体缺陷'
+        if deadline - asyncio.get_running_loop().time() < 10:
+            break
+    return result
 
 
 def inventory(source: Path, instruction='', entrypoints=None, preferred='') -> tuple[dict, dict]:
@@ -249,18 +274,21 @@ async def propose_revision(source: Path, instruction: str, model_id='', *, prefe
                                     'acceptance':planned.data.get('acceptance',[]),'files':current,
                                     'diffs':{name:''.join(difflib.unified_diff(originals[name].splitlines(True),body.splitlines(True)))[:8000]
                                              for name,body in changed.items()}},ensure_ascii=False),
-                        max_tokens=800,non_thinking=True,timeout_seconds=35)
+                        max_tokens=1600,non_thinking=True,timeout_seconds=35)
                     usage += int(review.usage.get('total_tokens',0))
                     review_issues = review.data.get('issues')
                     verified = not review.error and type(review.data.get('fulfilled')) is bool and isinstance(review_issues,list)
                     trace.append({'agent':'Semantic Review Agent','model':review.model,
                                   'status':'completed' if verified and review.data['fulfilled'] and not review_issues else 'needs_repair' if verified and review_issues else 'unverified',
                                   'issues':review_issues if isinstance(review_issues,list) else [],
+                                  'review_attempts':getattr(review,'review_attempts',1),
                                   'note':review.error[:200] if review.error else '静态语义审查，不代表运行验收'})
                     if verified and review_issues:
                         issues = [str(value)[:800] for value in review_issues[:8]]
                     elif not verified or not review.data['fulfilled']:
-                        issues = ['语义审查未明确通过：' + (review.error[:300] if review.error else 'fulfilled=false 或返回结构不完整；须重新核对需求并取得有效审查')]
+                        raise ReviewUnavailable('语义审查未完成，不能判断候选存在代码缺陷；未修改源码：' + review.error[:300])
+            except ReviewUnavailable:
+                raise
             except (ValueError, SyntaxError) as exc:
                 issues = [str(exc)]
             code_trace.update({'status': 'needs_repair' if issues else 'completed', 'issues': issues})

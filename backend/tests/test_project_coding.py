@@ -76,6 +76,34 @@ def test_over_budget_planning_is_reduced_before_code_request(tmp_path,monkeypatc
     assert (tmp_path/'a.py').read_text()==original['a.py']
 
 
+@pytest.mark.parametrize('recover', [True, False])
+def test_incomplete_review_retries_same_draft_without_rewriting_code(tmp_path, monkeypatch, recover):
+    (tmp_path/'train.py').write_text('count=1\n')
+    class ReviewRouter(Router):
+        async def complete_json(self, *args, **kwargs):
+            result = await super().complete_json(*args, **kwargs)
+            if result.data.get('_error'):
+                result.error = result.data['_error']
+                result.data = {}
+            return result
+    failed = {'_error': 'ValueError: 结构化响应被输出上限截断'}
+    router = ReviewRouter([{'read_files':['train.py']},
+        {'changes':[{'file':'train.py','old_text':'count=1','new_text':'count=3'}]},
+        failed, {'fulfilled':True,'issues':[]} if recover else failed])
+    monkeypatch.setattr(coding,'get_model_router',lambda:router)
+    request = coding.propose_revision(tmp_path,'set count to 3',context={'task_contract':{'entrypoints':['train.py']}})
+    if recover:
+        result = asyncio.run(request)
+        assert result[1]['train.py']=='count=3\n'
+        assert result[-1][-1]['review_attempts']==2
+    else:
+        with pytest.raises(coding.ReviewUnavailable, match='不能判断候选存在代码缺陷'):
+            asyncio.run(request)
+    assert len(router.calls)==4
+    assert router.calls[2][1]==router.calls[3][1]
+    assert (tmp_path/'train.py').read_text()=='count=1\n'
+
+
 def test_additional_read_and_syntax_repair_are_bounded(tmp_path, monkeypatch):
     (tmp_path / 'a.py').write_text('n = 1\n')
     (tmp_path / 'b.py').write_text('n = 2\n')
