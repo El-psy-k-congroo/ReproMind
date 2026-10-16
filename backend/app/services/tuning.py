@@ -136,12 +136,13 @@ def build_tuning_plans(job, budget=6):
         domain_warnings = []
         domains.update(configuration_domains(source, binding,domain_warnings))
         space, baseline = [], {}
+        grouped_parameters = []
         for group, aliases in GROUPS.items():
-            name = next((alias for alias in aliases if alias in declarations), '')
-            config_name = next((key for key in config_defaults if key.split('.')[-1] in aliases), '')
-            if not name and config_name: name = 'config:' + config_name
-            if not name:
-                continue
+            names = [alias for alias in aliases if alias in declarations]
+            if not names:
+                names = ['config:' + key for key in config_defaults if key.split('.')[-1] in aliases]
+            grouped_parameters.extend((group, name) for name in names)
+        for group, name in grouped_parameters:
             try:
                 value = config_defaults[name[7:]] if name.startswith('config:') else _current_value(command.get('argv', []), name, declarations[name])
                 domain = domains.get(name) or domains.get(name.removeprefix('config:').split('.')[-1])
@@ -192,16 +193,21 @@ def build_tuning_plans(job, budget=6):
             if trial not in unique:
                 unique.append(trial)
         fingerprint = command_fingerprint(command, source)
+        uncovered = [row['parameter'] for row in space if not any(
+            row['parameter'] in trial for trial in unique[:budget])]
         plans.append({'dataset': command.get('dataset'), 'strategy': 'bounded_coordinate_then_joint',
                       'declared_parameters': {name:_current_value(command.get('argv',[]),name,value) for name,value in declarations.items()},
                       'parameters_without_search_domain': [name for name in declarations if name not in {item['parameter'] for item in space}],
                       'config_binding': {key:value for key,value in binding.items() if key!='data'} if binding else None,
                       'space': space, 'baseline_parameters': baseline, 'trials': unique[:budget] if fingerprint else [],
+                      'parameters_not_covered_by_budget': uncovered,
                       'max_trials': budget, 'max_seconds': 1800, 'fingerprint': fingerprint,
                       'unsupported_domains':domain_warnings,
                       'selection_rule': '仅验证集；测试集不用于触发搜索、选参或提前停止',
                       'status': 'proposed', 'requires_approval': True,
-                      'limitation': '预算有限的局部搜索，不保证全局最优；缺少验证指标时不搜索'+('；'+'；'.join(domain_warnings) if domain_warnings else '')})
+                      'limitation': '预算有限的局部搜索，不保证全局最优；缺少验证指标时不搜索'
+                          + ('；预算内未覆盖参数：'+', '.join(uncovered) if uncovered else '')
+                          + ('；'+'；'.join(domain_warnings) if domain_warnings else '')})
     return plans
 
 
