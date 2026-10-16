@@ -59,7 +59,19 @@ def device_log_evidence(logs):
     return findings[:8]
 
 
-async def probe_framework(python, framework, verify_compute=False):
+def gpu_visibility_environment(required, configured, inherited=None):
+    """Make an approved GPU choice visible to author entrypoints that require it."""
+    if not required: return {}
+    inherited = os.environ if inherited is None else inherited
+    value = configured.get('CUDA_VISIBLE_DEVICES', inherited.get('CUDA_VISIBLE_DEVICES'))
+    if value is None or not str(value).strip(): value = '0'
+    value = str(value).strip()
+    if value == '-1':
+        raise ValueError('已要求 GPU，但运行环境显式禁用了全部 CUDA 设备；未启动 CPU 实验')
+    return {'CUDA_VISIBLE_DEVICES':value}
+
+
+async def probe_framework(python, framework, verify_compute=False, visible_devices=None):
     python = Path(python)
     if not python.is_file():
         return {'checked': False, 'framework': framework, 'error': '当前项目解释器不存在'}
@@ -101,6 +113,8 @@ async def probe_framework(python, framework, verify_compute=False):
         env = os.environ.copy()
         prefix = python.parent
         env['PATH'] = os.pathsep.join(str(prefix / p) for p in ['Library/bin', 'Scripts', '']) + os.pathsep + env.get('PATH', '')
+        if visible_devices is not None:
+            env['CUDA_VISIBLE_DEVICES'] = str(visible_devices)
         try:
             process = subprocess.run([str(python), '-c', script], capture_output=True,
                                      text=True, timeout=90 if verify_compute else 30, check=False, env=env)
@@ -113,7 +127,7 @@ async def probe_framework(python, framework, verify_compute=False):
             return {'checked': False, 'framework': framework, 'error': str(exc)[:200]}
     # Concurrent UI/chat requests share one runtime subprocess. Client timeout
     # must not start another GPU context while the previous probe is still alive.
-    key = (asyncio.get_running_loop(), str(python.resolve()), framework, verify_compute)
+    key = (asyncio.get_running_loop(), str(python.resolve()), framework, verify_compute, visible_devices)
     task = _FRAMEWORK_PROBES.get(key)
     if task is None:
         task = asyncio.create_task(asyncio.to_thread(probe))

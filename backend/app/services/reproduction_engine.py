@@ -39,7 +39,7 @@ from .official_datasets import discover_official, normalize_tabular, dataset_key
 from .paper_evidence import core_implementation_concerns
 from .paper_contract import vague_spec, validate_scope, spec_ready
 from .tuning import command_fingerprint, parameter_argv, validation_score, best_trial, tuning_gate
-from .runtime_evidence import probe_framework, probe_interpreter
+from .runtime_evidence import probe_framework, probe_interpreter, gpu_visibility_environment
 from .environment_recovery import pytorch_cuda_plan, failure_kind, protected_constraints, validate_pip_report, package_name
 from .gpu_preparation import TF_WINDOWS_PROFILE, tensorflow_gpu_plan, validate_cuda_dependency_plan, protected_conda_specs
 from .repair_isolation import isolate_failed_command
@@ -4149,6 +4149,21 @@ async def execute_reproduction(job_id: str) -> None:
             output_root.mkdir(parents=True,exist_ok=True)
             run_env = {"REPROMIND_DATA_DIR": str(data_root), 'REPROMIND_OUTPUT_DIR':str(output_root)}
             run_env.update((command.get('runtime_environment') or {}).get('variables') or {})
+            environment = dict(job.environment_spec or {})
+            requires_gpu = environment.get('gpu_requested') or (environment.get('hardware_plan') or {}).get('requirement') == 'required'
+            visibility = gpu_visibility_environment(requires_gpu, run_env)
+            if visibility:
+                selected_visibility = visibility['CUDA_VISIBLE_DEVICES']
+                runtime = await probe_framework(env_python,
+                    (environment.get('hardware_plan') or {}).get('framework','pytorch'),
+                    verify_compute=True, visible_devices=selected_visibility)
+                if not (runtime.get('checked') and runtime.get('cuda_available') and runtime.get('compute_checked')):
+                    raise RuntimeError('所选 CUDA 可见设备未通过真实 GPU 运算检查；未启动 CPU 实验：'+str(runtime.get('error') or 'GPU 不可用'))
+                run_env.update(visibility)
+                environment['gpu_runtime'] = {**runtime, 'CUDA_VISIBLE_DEVICES':selected_visibility}
+                job.environment_spec = environment
+                job.logs = (job.logs or '') + f'\n[RuntimeDeviceSelection] CUDA_VISIBLE_DEVICES={selected_visibility}；GPU 运算预检通过，实际模型设备仍以运行证据为准。\n'
+                await session.commit()
             if command.get("pythonpath"):
                 run_env["PYTHONPATH"] = str(command["pythonpath"])
             combined_output = job.logs or ""
