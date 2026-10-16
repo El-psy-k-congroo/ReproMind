@@ -74,7 +74,13 @@ async def tuning_plan(project_id: str, job_id: str, db: AsyncSession = Depends(g
         ReproductionJob.id == job_id, ReproductionJob.project_id == project_id))
     if not job:
         raise HTTPException(status_code=404, detail="复现任务不存在")
-    plans = await asyncio.to_thread(reviewed_plans, job, 6, purpose)
+    if not job.workspace_path or not (job.execution_command or {}).get('commands'):
+        return {'plans': [], 'executed': False, 'requires_approval': True, 'pending': True,
+                'reason': '工作区或作者执行入口尚在准备，暂无可审查的调参计划；未启动额外搜索。'}
+    try:
+        plans = await asyncio.to_thread(reviewed_plans, job, 6, purpose)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"plans": plans, "executed": False, "requires_approval": True}
 
 
