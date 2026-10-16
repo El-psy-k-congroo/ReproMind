@@ -184,8 +184,10 @@ def inherit_dataset_parameters(base, planned, source, changed=(), fresh_output_r
         # The command builder binds these paths to this new run. Never restore
         # an old --output value over a new isolated output directory.
         for key,tokens in fresh.items():
-            if not re.fullmatch(r'(?:output|output[-_]dir|save[-_]dir|log[-_]dir)',key): continue
             value = tokens[0].split('=',1)[1] if '=' in tokens[0] else tokens[1] if len(tokens)==2 else ''
+            bound = (command.get('isolated_output_bindings') or {}).get(key)
+            if not re.fullmatch(r'(?:output|output[-_]dir|save[-_]dir|log[-_]dir)',key) and bound != value:
+                continue
             if value and Path(value).is_absolute() and any(
                     native_path(root) == native_path(value) or native_path(root) in native_path(value).parents
                     for root in fresh_output_roots):

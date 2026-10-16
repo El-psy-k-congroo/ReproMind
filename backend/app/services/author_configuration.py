@@ -59,6 +59,7 @@ def config_commands(source, entry, base, datasets, examples, run_workspace, *, p
     configs = choose_configs(source, entry, datasets)
     commands = []
     for label, config in configs.items():
+        output_bindings = {}
         argv = [*base, flag[1], str(config)] if flag else [*base, str(config)]
         if phase == 'sampling':
             sampling = [row for row in examples if '--sample' in row['args']]
@@ -72,10 +73,16 @@ def config_commands(source, entry, base, datasets, examples, run_workspace, *, p
             from .tuning import numeric_flags
             defaults = numeric_flags(bodies)
             for index,value in enumerate(example['args']):
+                original_value = value
                 if phase == 'sampling' and value == '--fid': continue
                 if re.fullmatch(r'\{[^}]+\}',value) and index and example['args'][index-1].removeprefix('--') in defaults:
                     value = str(defaults[example['args'][index-1].removeprefix('--')])
                 for old,new in replacements.items(): value = value.replace(old,new)
+                if run_workspace and '{PROJECT_PATH}' in original_value and index and example['args'][index-1].startswith('--'):
+                    root = native_path(run_workspace/'output')
+                    destination = native_path(value)
+                    if Path(value).is_absolute() and (destination == root or root in destination.parents):
+                        output_bindings[example['args'][index-1].lstrip('-')] = value
                 args.append(value)
             if flag and flag[1] in args:
                 index = args.index(flag[1]) + 1
@@ -101,8 +108,11 @@ def config_commands(source, entry, base, datasets, examples, run_workspace, *, p
         # An explicit supported output option keeps a new run from reusing published results.
         if run_workspace and positional and re.search(r'def load_config\(',bodies) and re.search(r'add_argument\([^\n]*["\']--output["\']',bodies):
             output = run_workspace.parents[1]/'outputs'/run_workspace.name[:8]/key(label)[:32]
-            if not any(v in {'-o','--output'} or v.startswith('--output=') for v in argv): argv += ['--output',str(output)]
+            if not any(v in {'-o','--output'} or v.startswith('--output=') for v in argv):
+                argv += ['--output',str(output)]
+                output_bindings['output'] = str(output)
         commands.append({'argv':argv, 'cwd':canonical_source, 'dataset':label,
                          'config_path':str(config), 'command_source':'author_config_and_documented_cli',
+                         'isolated_output_bindings':output_bindings,
                          'config_selection_note':'选用匹配数据集和模型的作者配置；多种子目录仅选择作者 seed 0，不代表多次实验平均'})
     return commands
