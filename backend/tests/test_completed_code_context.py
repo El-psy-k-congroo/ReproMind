@@ -1,5 +1,5 @@
 import pytest
-from app.api.copilot import _code_action_requested, _rerun_requested, _run_instruction
+from app.api.copilot import _code_action_requested, _rerun_requested, _run_instruction, _gpu_capability_question
 
 
 @pytest.mark.parametrize('question', [
@@ -25,3 +25,24 @@ def test_new_code_directive_remains_actionable(question):
 def test_conditional_prefix_is_not_lost_when_splitting_a_comma():
     assert not _run_instruction('如果环境已经就绪，请启动当前实验。')
     assert _run_instruction('请启动当前实验，如果出错请说明原因。')
+
+
+@pytest.mark.parametrize('question', [
+    '当前兼容性修改已经应用。请使用本次修订后的依赖文件，在本机 CUDA GPU 启动 MNIST 实验，保留作者训练轮数。不要再次修改代码。',
+    '请保留当前模型和数据，在现有环境中运行实验。',
+    '麻烦使用当前环境，按原参数评估模型。',
+])
+def test_device_and_environment_clauses_preserve_explicit_run_directive(question):
+    assert _run_instruction(question)
+    assert _rerun_requested(question)
+    assert not _gpu_capability_question(question)
+    assert not _code_action_requested(question)
+
+
+@pytest.mark.parametrize('question', [
+    '请解释当前依赖，在 GPU 上运行是否兼容？',
+    '如果依赖安装完成，在 GPU 启动实验。',
+    '请使用当前代码，不要启动实验。',
+])
+def test_readonly_conditional_and_negated_continuations_do_not_start_runs(question):
+    assert not _run_instruction(question)

@@ -361,16 +361,21 @@ def _run_instruction(question: str) -> bool:
     clauses = []
     for sentence in re.split(r'[；;。！!\n]', question.lower()):
         conditional = False
+        imperative_context = False
         for clause in re.split(r'[，,]', sentence):
             conditional = conditional or bool(re.search(r'如果|假如|假设|要是|倘若', clause))
             if not conditional:
-                clauses.append(clause)
-    for clause in clauses:
+                clauses.append((clause, imperative_context))
+            if re.match(r'\s*(?:请|帮我|麻烦|直接|立即)', clause):
+                imperative_context = not bool(re.search(
+                    r'请问|说明|解释|介绍|分析|核对|检查|列出|展示|查看|为什么|如何|能否|是否|[？?]', clause))
+    for clause, imperative_context in clauses:
         if re.search(r'请问|(?:现在|当前|目前)(?:还|的|有)|可以吗|能够吗|能否|是否|为什么|如何|怎么|吗[？?]?\s*$', clause):
             continue
         if re.match(r'\s*(?:不要|别|先不|只(?:问|解释|分析|预览))', clause):
             continue
-        if re.search(r'^(?:\s*)(?:请|帮我|麻烦|现在|直接|立即|把|将|开始|启动|运行|训练|采样|评估|推理|编码|解码|重跑|重新|从头)', clause):
+        if (re.search(r'^(?:\s*)(?:请|帮我|麻烦|现在|直接|立即|把|将|开始|启动|运行|训练|采样|评估|推理|编码|解码|重跑|重新|从头)', clause)
+                or imperative_context and re.match(r'\s*(?:在|于|使用|用|基于|通过|按)', clause)):
             if re.search(_RUN_VERBS, clause) and not re.search(r'怎么|如何|为什么|能否|是否|假如|如果.{0,15}(?:能|可以|要|需)', clause):
                 # An imperative can contain an explanation or a negative for
                 # another dataset later; neither changes its primary intent.
