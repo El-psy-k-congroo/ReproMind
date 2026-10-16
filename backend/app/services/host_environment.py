@@ -76,7 +76,8 @@ def wheel_support(filename, python, system=None, machine=None):
 
 
 def check_release(requirement, payload, python, system=None, machine=None):
-    files = [row for row in payload.get('urls', []) if not row.get('yanked')]
+    published = payload.get('urls', [])
+    files = [row for row in published if not row.get('yanked')]
     native_required = Requirement(requirement).name.lower() in {'bitsandbytes','triton','xformers','torch','flash-attn'}
     if (system or platform.system()) == 'Windows' and native_required:
         # Older GPU libraries shipped Linux .so inside misleading py3-none-any wheels.
@@ -87,7 +88,32 @@ def check_release(requirement, payload, python, system=None, machine=None):
     runtimes = [version for version in candidates if any(wheel_support(row.get('filename',''), version, system, machine)
                 and (not row.get('requires_python') or SpecifierSet(row['requires_python']).contains(version + '.0')) for row in files)]
     return {'requirement': requirement, 'compatible_wheels': compatible[:4], 'compatible_python': runtimes,
-            'compatible': bool(compatible), 'available_files': [row.get('filename') for row in files][:80]}
+            'compatible': bool(compatible), 'available_files': [row.get('filename') for row in files][:80],
+            'release_state': 'missing' if not published else 'withdrawn' if all(row.get('yanked') for row in published) else 'published',
+            'withdrawn_files': [{'filename':row.get('filename'), 'reason':str(row.get('yanked_reason') or '维护者未说明原因')[:400]}
+                                for row in published if row.get('yanked')][:20]}
+
+
+def release_issue(row, python, system=None, machine=None):
+    """Repository availability and maintainer withdrawal are not OS diagnoses."""
+    system, machine = system or platform.system(), machine or platform.machine()
+    state = row.get('release_state')
+    if state == 'withdrawn':
+        reasons = '；'.join(dict.fromkeys(item['reason'] for item in row.get('withdrawn_files', [])))
+        reason = '固定版本的发行文件已被维护者撤回（yanked）：' + reasons + '。不能据此认定必须使用 Linux；未尝试安装。'
+        options = ['核对维护者撤回原因及当前 Python/API 兼容性', '审查可获取版本与源码的联合适配方案，再独立验证实验']
+    elif state == 'missing':
+        reason = '已查询的官方发行源没有列出该固定版本的安装文件；这不是已证实的操作系统不兼容。'
+        options = ['核验作者提供的官方历史发行地址', '审查可获取版本与源码的联合适配方案']
+    else:
+        reason = f'作者固定版本没有当前 {system}/{machine}/Python {python} 的可用 wheel'
+        options = []
+        if row.get('compatible_python'):
+            options.append('在本机使用发行文件支持的 Python：' + '、'.join(row['compatible_python']))
+        if any(wheel_support(filename, python, 'Linux', machine) for filename in row.get('available_files', [])):
+            options.append('发行源有对应 Linux wheel，可选择兼容的 Linux/WSL 执行主机并另外验证 GPU')
+        options.append('制定当前主机的依赖与源码联合适配方案并重新验证指标')
+    return {'requirement': row['requirement'], 'reason': reason, 'options': options}
 
 
 async def inspect_host_requirements(source, spec):
@@ -126,9 +152,7 @@ async def inspect_host_requirements(source, spec):
         rows = await asyncio.gather(*(inspect(pin) for pin in dict.fromkeys(pins)))
     common = set.intersection(*(set(row['compatible_python']) for row in rows if row.get('compatible_python') is not None)) if rows and all('compatible_python' in row for row in rows) else set()
     recommended = next((version for version in ['3.11','3.10','3.12','3.9','3.8','3.7'] if version in common), '')
-    issues = [{'requirement': row['requirement'], 'reason': f'作者固定版本没有当前 {platform.system()}/{platform.machine()}/Python {python} 的可用 wheel',
-               'options': ['在兼容的 Linux/WSL 执行主机保留作者依赖', '制定当前主机的依赖与源码联合迁移并重新验证指标']}
-              for row in rows if row['compatible'] is False]
+    issues = [release_issue(row, python) for row in rows if row['compatible'] is False]
     for wheel in spec.get('incompatible_requirements') or []:
         issues.append({'requirement':wheel,'reason':'作者 wheel 的操作系统或 Python ABI 与当前主机不一致；同名现代包只是迁移候选，不能静默替换后认定兼容。',
                        'options':['协调源码 API 与当前平台依赖进行迁移','选择与作者 wheel 匹配的执行主机']})
