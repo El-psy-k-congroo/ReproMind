@@ -168,7 +168,7 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
         'dataset_result_rows_complete': min(12, len(job.get('dataset_results') or job.get('dataset_results_preview') or [])) == job.get('dataset_results_count'),
         'dataset_results': rows(job.get('dataset_results') or job.get('dataset_results_preview') or [],
             ['dataset', 'metric_key', 'metrics', 'target', 'delta', 'verdict', 'tuning_selected', 'baseline_metrics',
-             'comparison_scope', 'comparison_basis']),
+             'comparison_scope', 'comparison_basis', 'metric_partition']),
         'tuning_attempts_total': job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempt_rows_complete': min(12, len(job.get('tuning_attempts') or [])) == job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempts': rows(job.get('tuning_attempts') or [],
@@ -1644,6 +1644,7 @@ async def stream_answer(
                 "execution_command 未指定设备、或源码出现可选 GPU 检测，都不能证明训练实际使用 GPU。"
                 "未提供的字段不得解释为空，例如没有 dataset_results 字段时应查看 dataset_results_count。"
                 "live_training 是实际日志解析的最新逐轮进度；没有最终 dataset_results 时不得把 loss 当成最终评估结果。"
+                "metric_partition=test仅表示该行指标来自测试分区；没有该字段或为unscoped时不能将训练loss或未标明分区的指标说成测试值。"
                 "execution_log_tails 包括当前实验磁盘日志的开头和末尾，优先于可能滞后的 job.logs_tail；"
                 "proposed_tuning_plans_not_executed 是待确认的建议，不是已执行实验。调参不得由测试分数触发或选参，"
                 "verified_run_facts 是未按片段预算裁剪的当前结构化事实，数量、参数范围、历史尝试以此为准。"

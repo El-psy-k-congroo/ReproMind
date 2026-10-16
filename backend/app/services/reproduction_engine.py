@@ -2350,6 +2350,12 @@ async def prepare_reproduction(job_id: str) -> None:
 
 
 def _extract_metrics(output: str) -> dict[str, float]:
+    from .metric_observations import evaluation_observations
+    evidence = evaluation_observations(output, METRIC_PATTERN)
+    return _unscoped_metrics(evidence['text'] if evidence['scoped'] else output)
+
+
+def _unscoped_metrics(output: str) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for name, value, percent in METRIC_PATTERN.findall(output):
         key = name.lower().replace("accuracy", "acc")
@@ -4425,10 +4431,12 @@ async def execute_reproduction(job_id: str) -> None:
                     verdict = "dataset_version_unverified"
                 if tuning_selected:
                     verdict = 'tuned_result'  # Changed hyperparameters are not an exact paper-configuration reproduction.
+                from .metric_observations import evaluation_observations
                 row = {
                     "dataset": dataset,
                     "return_code": return_code,
                     "metrics": metrics,
+                    'metric_partition': evaluation_observations(output, METRIC_PATTERN)['partition'],
                     "metric_key": metric_key,
                     "target": target,
                     "delta": None if functional else delta,
