@@ -209,9 +209,12 @@ def validation_score(output, metric):
     import re
     aliases = {'accuracy': 'acc(?:uracy)?', 'auc': '(?:auc|auroc)', 'f1': 'f1(?:[-_]score)?'}
     name = aliases.get(metric, re.escape(metric))
-    values=[];epochs={}
+    values=[];epochs={};active_epoch=None
     for line in output.splitlines():
-        segment = re.search(r'\b(?:val(?:idation)?|valid)\b([^|\r\n]*)',line,re.I)
+        if re.search(r'\bfinal\s+(?:evaluation|test)|\bload(?:ing)?\s+\d+(?:st|nd|rd|th)?\s+epoch',line,re.I):active_epoch=None
+        epoch=re.search(r'\bepoch\s*[:=]?\s*\[?\s*(\d+)',line,re.I)
+        if epoch:active_epoch=int(epoch[1])
+        segment = re.search(r'\b(?:val(?:idation)?|valid)\b(.*?)(?=\b(?:train(?:ing)?|test)\b|$)',line,re.I)
         direct = re.search(r'\b(?:val(?:idation)?|valid)[_\s-]*'+name+r'\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',line,re.I)
         match = direct or (re.search(r'\b'+name+r'\s*[:=]\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)',segment[1],re.I) if segment else None)
         if not match: continue
@@ -220,8 +223,7 @@ def validation_score(output, metric):
         if metric in {'accuracy','auc','f1'} and value>1: value/=100
         if metric in {'accuracy','auc','f1'} and not 0<=value<=1: continue
         values.append(value)
-        epoch=re.search(r'\bepoch\s*[:=]?\s*(\d+)',line,re.I)
-        if epoch: epochs[int(epoch[1])]=value
+        if active_epoch is not None: epochs[active_epoch]=value
     restored=re.findall(r'\bload(?:ing)?\s+(\d+)(?:st|nd|rd|th)?\s+epoch',output,re.I)
     if restored and int(restored[-1]) in epochs: return epochs[int(restored[-1])]
     return values[-1] if values else None

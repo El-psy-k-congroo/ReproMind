@@ -711,6 +711,14 @@ async def _status_answer(db: AsyncSession, project: Project, run_id: str, questi
                 detail += " 随后已在暂停状态下修复 CUDA 张量进入 NumPy 评估的代码；仅做了小样本 CPU/GPU 一致性检查，完整实验尚未重新验证。"
     if status == "paused":
         detail += "暂停不等于训练完成；未完成的数据集恢复后可能从头运行。"
+    if workspace and any(term in question for term in ('日志','卡住','卡了','错误','阻塞')):
+        from ..services.runtime_evidence import execution_logs
+        logs = await asyncio.to_thread(execution_logs, workspace, job.id, 1)
+        if logs:
+            log=logs[0]
+            updated=datetime.fromtimestamp(log['updated_at'],timezone.utc).isoformat()
+            detail += f"\n\n所选实验原始日志 `{log['log']}`（最后写入 {updated}）：\n```text\n{_redact(log['tail'])}\n```\n"
+            detail += '日志更新时间和任务状态不足以单独判断是否卡住；没有完整测试结果时不能宣布运行成功。'
     searches = result.get('tuning_sessions') or []
     if searches:
         latest_search = searches[-1]

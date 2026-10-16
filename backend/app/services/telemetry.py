@@ -4,7 +4,7 @@ import re
 import math
 from pathlib import Path
 
-EPOCH = re.compile(r"\b[Ee]poch\s*[:=]?\s*(\d+)(?:\s*/\s*\d+)?", re.IGNORECASE)
+EPOCH = re.compile(r"\b[Ee]poch\s*[:=]?\s*\[?\s*(\d+)(?:\s*/\s*\d+)?", re.IGNORECASE)
 FOLD = re.compile(r"\b(?:test[_\s-]*fold|fold)\s*[:=]?\s*(\d+)", re.IGNORECASE)
 METRIC = re.compile(
     r"\b((?:(?:train|training|val|valid|validation|test)[_\s]+)?(?:avg[_\s]*loss|loss|acc(?:uracy)?|auc|auroc|aupr|f1|"
@@ -27,12 +27,25 @@ def parse_experiment_log(path: Path, *, dataset: str = '', attempt: str = '') ->
         return {"dataset": dataset, "attempt": attempt, "points": [], "note": "日志超过解析限制"}
     text = path.read_text(encoding="utf-8", errors="replace")
     points: list[dict] = []
+    active_epoch = None
+    active_fold = None
     for line in text.splitlines():
+        if re.search(r'\bfinal\s+(?:evaluation|test)|\bload(?:ing)?\s+\d+(?:st|nd|rd|th)?\s+epoch',line,re.I):
+            active_epoch = None
+            active_fold = None
         epoch = EPOCH.search(line)
-        if not epoch:
+        fold = FOLD.search(line)
+        if epoch:
+            active_epoch = int(epoch.group(1))
+            if fold: active_fold = int(fold.group(1))
+        parts = list(re.finditer(r'\b(train(?:ing)?|val(?:id(?:ation)?)?|test)\b',line,re.I))
+        if active_epoch is None or (not epoch and not parts):
             continue
         metrics = {}
-        split = ''
+        # Some author summaries put "Train Loss" after other metrics. A
+        # single partition marker still identifies that whole summary line.
+        partition = {('val' if m[1].lower().startswith('val') else 'train' if m[1].lower().startswith('train') else 'test') for m in parts}
+        split = next(iter(partition)) if len(partition) == 1 else ''
         for match in METRIC.finditer(line):
             key, value, percent = match.groups()
             preceding = line[:match.start()]
@@ -47,15 +60,23 @@ def parse_experiment_log(path: Path, *, dataset: str = '', attempt: str = '') ->
                 normalized = f'{split or "train"}_loss'
             elif not normalized.startswith(('train_', 'val_', 'test_')) and split:
                 normalized = f'{split}_{normalized}'
+            from .metric_contract import metric_name
+            prefix = re.match(r'^(train|val|test)_', normalized)
+            bare = normalized[prefix.end():] if prefix else normalized
+            canonical = metric_name(bare)
+            canonical = 'acc' if canonical == 'accuracy' else canonical
+            normalized = (prefix[0] if prefix else '') + canonical
             numeric = float(value)
             if math.isfinite(numeric):
                 # Keep author units; the dashboard already formats fractions
                 # and percentage numbers without mixing the two in one key.
                 metrics[normalized] = numeric
         if metrics:
-            fold = FOLD.search(line)
-            points.append({"epoch": int(epoch.group(1)),
-                           **({"fold": int(fold.group(1))} if fold else {}), **metrics})
+            point={"epoch": active_epoch, **({"fold": active_fold} if active_fold is not None else {}), **metrics}
+            if points and points[-1]['epoch']==active_epoch and points[-1].get('fold')==active_fold:
+                points[-1].update(metrics)
+            else:
+                points.append(point)
     if len(points) > 500:
         points = [points[round(index * (len(points)-1)/499)] for index in range(500)]
     return {
