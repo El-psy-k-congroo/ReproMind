@@ -920,7 +920,9 @@ def _workspace_context(context, job, workspace, question, terms,
                                            for label,path in list(configs.items())[:2]]
         selected_files = entry_sources(sources, question_entries[:1])
         from ..services.source_calculations import calculation_packets, numbered_code, configured_model_names
+        from ..services.source_class_context import class_bindings, enclosing_class
         model_names = configured_model_names(job.execution_command)
+        source_trees = {}
         implementation, named_implementation, structure, named_functions, optimizers, calculations = [], [], [], [], [], []
         network_methods={'forward','call'}
         if re.search(r'编码|解码|encoder|decoder|encode|decode',question,re.I):
@@ -930,6 +932,7 @@ def _workspace_context(context, job, workspace, question, terms,
             calculations.extend(calculation_packets(body, question, path.relative_to(sources).as_posix()))
             try: tree = ast.parse(body)
             except SyntaxError: continue
+            source_trees[path.relative_to(sources).as_posix()] = tree
             for node in ast.walk(tree):
                 if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) and len(node.name)>=4 and config_key(node.name) in config_key(question):
                     begin=node.lineno-1;end=min(len(lines),node.end_lineno,begin+30)
@@ -954,7 +957,8 @@ def _workspace_context(context, job, workspace, question, terms,
                                 'constructor_signature_from_static_ast':next((node.name+'('+ast.unparse(ctor.args)+')'
                                     for ctor in node.body if isinstance(ctor,ast.FunctionDef) and ctor.name=='__init__'),''),
                                 'construction_sites_from_static_ast':[
-                                    {'line':call.lineno,'expression':ast.unparse(call)[:600]}
+                                    {'line':call.lineno,'expression':ast.unparse(call)[:600],
+                                     'enclosing_class':enclosing_class(tree,call.lineno)}
                                     for call in ast.walk(tree) if isinstance(call,ast.Call) and
                                     (call.func.id if isinstance(call.func,ast.Name) else call.func.attr if isinstance(call.func,ast.Attribute) else '')==node.name
                                 ][:3]})
@@ -969,6 +973,15 @@ def _workspace_context(context, job, workspace, question, terms,
                         begin=node.lineno-1;end=min(len(lines),getattr(node,'end_lineno',node.lineno),begin+15)
                         optimizers.append({'file':path.relative_to(sources).as_posix(),'line':node.lineno,
                             'code':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(begin,end))})
+        binding = class_bindings(source_trees, question_entries[:1], model_names)
+        task_evidence['selected_class_binding_not_execution_proof'] = binding
+        if binding['unambiguous']:
+            active_classes = set(binding['reachable'])
+            named_implementation = [row for row in named_implementation if row['symbol'].split('.')[0] in active_classes]
+            structure = [row for row in structure if row['class'] in active_classes]
+            for row in named_implementation:
+                row['construction_sites_from_static_ast'] = [site for site in row['construction_sites_from_static_ast']
+                    if not site['enclosing_class'] or site['enclosing_class'] in active_classes]
         task_evidence['loss_assignments'] = implementation[:5]
         named_implementation.sort(key=lambda row:(
             -sum(name in config_key(row['file']+' '+row['symbol']) for name in model_names),
