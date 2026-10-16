@@ -199,8 +199,9 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     paper_spec = job.get('paper_spec') or {}
     slim_context['job']['paper_spec'] = {key: paper_spec[key] for key in
         ['title', 'datasets', 'metrics', 'hyperparameters', 'target_results'] if key in paper_spec}
+    from ..services.prompt_budget import whole_source_packets
     envelope = {'question': question, 'project_evidence': context,
-                'selected_source_evidence_not_execution_proof': context.get('source_task_evidence'),
+                'selected_source_evidence_not_execution_proof': whole_source_packets(context.get('source_task_evidence'), int(limit * .7)),
                 'source_loss_definitions_not_execution_proof': context.get('source_loss_definitions', [])[:4],
                 'public_author_archive_files_not_download_proof': [row.get('filename') for row in
                     (context.get('author_archive_data_evidence') or {}).get('public_files', [])[:30]],
@@ -234,9 +235,23 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
                                                for key in ['run_id', 'status', 'stage', 'dataset_results_count']}
         candidate['project_evidence'].pop('gpu_readiness', None)
     if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
+        candidate['source_loss_definitions_not_execution_proof'] = []
+    if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
         candidate['verified_run_facts'] = {key: facts[key] for key in
             ['run_id', 'status', 'dataset_results_count', 'tuning_attempts_total']}
         candidate['evidence_budget']['facts_omitted'] = True
+    # Reserved exact-source slots used to bypass every limit above. Keep whole
+    # packets with explicit omissions rather than silently sending oversized JSON.
+    if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
+        candidate['source_loss_definitions_not_execution_proof'] = []
+        candidate['public_author_archive_files_not_download_proof'] = []
+        candidate['project_evidence'] = {key: (context.get('job') or {}).get(key)
+                                         for key in ['run_id', 'status', 'stage']}
+        source = candidate.get('selected_source_evidence_not_execution_proof')
+        for fraction in (.6, .4, .2, 0):
+            candidate['selected_source_evidence_not_execution_proof'] = whole_source_packets(source, int(limit * fraction))
+            if len(json.dumps(candidate, ensure_ascii=False, default=str)) <= limit:
+                break
     return json.dumps(candidate, ensure_ascii=False, default=str)
 
 
