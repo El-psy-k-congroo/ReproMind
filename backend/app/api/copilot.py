@@ -860,6 +860,8 @@ async def _context(db: AsyncSession, project: Project, question: str = "", run_i
                               for row in (result.get("preparation_history") or [])[-2:]] if asks_diagnosis or asks_data else [],
         "logs_tail": _redact((job.logs or "")[-1800:]) if asks_diagnosis or asks_device or asks_results else "",
     }
+    if _tuning_results_question(question):
+        return context  # Recorded facts need no source scan or model generation.
     workspace = _safe_workspace(job)
     if asks_device and not performance:
         try:
@@ -1355,6 +1357,50 @@ def _tuning_plan_question(question: str) -> bool:
         term in lower for term in ('方案', '哪些参数', '候选', '预算', '只调', '只对', '搜索哪些', '建议', '空间', '范围'))
 
 
+def _tuning_results_question(question: str) -> bool:
+    if _code_action_requested(question) or _rerun_requested(question) or _experiment_control_requested(question):
+        return False
+    return bool(re.search(r'调参|搜索试验|搜索结果', question)) and bool(
+        re.search(r'已执行|实际记录|实际.*(?:分数|结果)|调参结果|搜索结果|哪组.*(?:采用|选中)|验证分数|测试分数', question)) and not bool(
+        re.search(r'如何设计|怎么设计|搜索空间|建议范围', question))
+
+
+def _tuning_results_answer(context: dict) -> str:
+    job = context.get('job') or {}
+    records = job.get('tuning_attempts') or []
+    def safe(value):
+        return str(value).replace('|', '/').replace('\n', ' ')[:600]
+    def number(value):
+        return f'{value:g}' if type(value) in {int, float} and math.isfinite(value) else '未记录'
+    def metrics(value):
+        return '；'.join(f'{safe(key)}={number(item)}' for key, item in (value or {}).items()) or '未记录'
+    sessions = {row['id']: row for row in job.get('tuning_sessions') or [] if row.get('id')}
+    lines = [f"所选实验 `{safe(job.get('run_id', '未知'))}`，已记录 {job.get('tuning_attempts_count', len(records))} 组参数尝试。"]
+    if not records:
+        return '\n\n'.join(lines + ['当前记录没有已执行的参数尝试；待审查方案不等于已经搜索。'])
+    lines += ['', '| 会话 / 试次 | 数据集 | 参数变更 | 验证指标和值 | 对应测试指标 | 选择记录 |',
+              '|---|---|---|---|---|---|']
+    for row in records[-60:]:
+        session = sessions.get(row.get('session_id'), {})
+        chosen = ('按验证集选中候选，基线是否采用另列' if session.get('status') == 'completed' else '历史选中标记；会话完成状态待核') if row.get('selected') else '未选中'
+        if row.get('return_code') != 0:
+            chosen = '运行失败；不能采用'
+        lines.append(f"| {safe(str(row.get('session_id') or '历史')[:8])} / {safe(row.get('trial', '未记录'))} | {safe(row.get('dataset', ''))} | "
+                     f"{safe(json.dumps(row.get('parameters') or {row.get('parameter', '参数'): row.get('value')}, ensure_ascii=False))} | "
+                     f"{safe(row.get('validation_metric') or '历史未标明')}={number(row.get('validation_score', row.get('validation_accuracy')))} | "
+                     f"{metrics(row.get('test_metrics') or ({'accuracy':row['test_accuracy']} if row.get('test_accuracy') is not None else {}))} | {chosen} |")
+    if len(records) > 60:
+        lines.append(f'仅展示最近 60 组；其余 {len(records)-60} 组仍保留在实验记录。')
+    lines += ['', '原数据集结果：']
+    for row in job.get('dataset_results') or []:
+        lines.append(f"- {safe(row.get('dataset', ''))}：{metrics(row.get('baseline_metrics') or row.get('metrics'))}；"
+                     f"原基线判定 {safe(row.get('baseline_verdict', row.get('verdict', '未知')))}；"
+                     + ('该数据集曾采用调参结果，基线单独保留。' if row.get('tuning_selected') else '没有以调参候选覆盖该数据集的原基线。'))
+    lines += ['', '候选选中只表示验证集选择记录，不等于覆盖基线或论文复现成功；测试分数仅展示，不参与选参。'
+              '未标明分区的历史损失不能称为最终测试损失。']
+    return '\n'.join(lines)
+
+
 def _tuning_plan_answer(context: dict, question: str) -> str:
     job = context.get('job') or {}
     plans = context.get('proposed_tuning_plans_not_executed') or []
@@ -1562,12 +1608,15 @@ async def stream_answer(
                 gpu_capability = _gpu_capability_question(payload.question)
                 performance = _performance_question(payload.question)
                 tuning_plan_query = _tuning_plan_question(payload.question)
+                tuning_results_query = _tuning_results_question(payload.question)
+                if tuning_results_query:
+                    tuning_plan_query = False
                 status_query = _status_question(payload.question)
                 generation_diagnosis = _generation_diagnosis_question(payload.question)
                 if performance:
                     source_read = tuning_plan_query = status_query = generation_diagnosis = False
                 if not any((identity, source_read, control, code_action, rerun, restart_project, performance,
-                            gpu_capability, tuning_plan_query, status_query, generation_diagnosis,
+                            gpu_capability, tuning_plan_query, tuning_results_query, status_query, generation_diagnosis,
                             _recorded_results_requested(payload.question))):
                     code_action = await _semantic_code_requested(payload.question)
                 if identity:
@@ -1587,7 +1636,7 @@ async def stream_answer(
                 elif generation_diagnosis:
                     summary, history = "", []
                     context = await _context(session, project, payload.question, payload.run_id)
-                elif tuning_plan_query:
+                elif tuning_plan_query or tuning_results_query:
                     summary, history = "", []
                     context = await _context(session, project, payload.question, payload.run_id)
                 elif status_query:
@@ -1628,12 +1677,12 @@ async def stream_answer(
                 return
             yield _sse("status", {"message": "项目证据已读取，正在生成回答…"})
 
-            if _recorded_results_requested(payload.question) and not performance:
-                answer = _recorded_results_answer(context, payload.question)
+            if (_recorded_results_requested(payload.question) or tuning_results_query) and not performance:
+                answer = _tuning_results_answer(context) if tuning_results_query else _recorded_results_answer(context, payload.question)
                 user.context_json = {**(user.context_json or {}), 'status': 'completed'}
                 assistant = CopilotMessage(project_id=project_id, conversation_id=conversation_id,
                     role='assistant', content=answer, token_usage=0,
-                    context_json={'model':'recorded-results', 'status':'completed', 'error':'',
+                    context_json={'model':'recorded-tuning-results' if tuning_results_query else 'recorded-results', 'status':'completed', 'error':'',
                                   'run_id':(context.get('job') or {}).get('run_id') or payload.run_id})
                 session.add(assistant)
                 conversation.updated_at = utcnow()
