@@ -4,6 +4,7 @@ import { api } from '../api'
 import { runDatasetScope } from '../runScope'
 import { trainingDeviceLabel } from '../gpuEvidence'
 import { baselineComparison } from '../baselineComparison'
+import { installationTransportFailed } from '../environmentFailure'
 import type { ReproductionActivity, ReproductionRun, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun; approving?: boolean }>()
@@ -192,6 +193,9 @@ const percent = (value: number | null | undefined) => value === null || value ==
 const metricLabel = (key: string) => key === 'accuracy' ? '准确率' : key.toUpperCase()
 const metricValue = (value: number | null | undefined, key: string) => value === null || value === undefined ? '—' : ['accuracy', 'auc', 'auroc', 'aupr', 'f1', 'precision', 'recall'].includes(key) ? percent(value) : value.toFixed(4)
 const installFailureDetail = computed(() => {
+  if (props.run.status === 'failed' && installationTransportFailed(props.run.error_message, props.run.environment_spec.last_failure)) {
+    return '依赖来源的网络、代理或 TLS 连接失败，未证明该版本与本机不兼容。请先核对连接后重试准备；不会据此更换 Python、框架或执行主机。实验尚未启动。'
+  }
   if (props.run.status === 'failed' && /No matching distribution|Could not find a version/.test(props.run.error_message)) {
     const plan = gpuReadiness.value?.gpu_environment_plan
     return `安装包与当前解释器／平台不匹配，不是模型训练错误。${plan?.supported && plan.packages?.length ? `可预检的兼容方案：${plan.packages.join('、')}。` : plan?.reason || '需重新核对 Python 与依赖版本。'}重试先做依赖预检，不会无条件重装或更换 Python。`

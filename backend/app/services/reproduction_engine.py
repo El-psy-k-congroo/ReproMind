@@ -2943,20 +2943,23 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
                 [*command, '--dry-run', '--report', str(report_path)], timeout, resolution_log,
                 kind='dependency_resolution', step=index, total_steps=len(commands))
             if check_code != 0:
-                spec['platform_alert'] = {'title':'当前主机的依赖求解未通过', 'reason':'未开始安装该步骤的依赖；请检查平台、Python 与包版本约束。',
-                    'issues':[{'requirement':' '.join(command[4:]), 'reason':check_output[-1000:],
-                               'options':['根据求解日志协调依赖与源码迁移', '选择兼容的执行主机']}]}
-                spec['last_failure'] = {'kind':'dependency_resolution','step':index,'return_code':check_code,'detail':check_output[-1000:]}
+                kind = failure_kind(check_code, check_output)
+                if kind == 'network':
+                    spec.pop('platform_alert', None)
+                else:
+                    spec['platform_alert'] = {'title':'当前主机的依赖求解未通过', 'reason':'未开始安装该步骤的依赖；请检查平台、Python 与包版本约束。',
+                        'issues':[{'requirement':' '.join(command[4:]), 'reason':check_output[-1000:],
+                                   'options':['根据求解日志协调依赖与源码迁移', '选择兼容的执行主机']}]}
+                spec['last_failure'] = {'kind':kind,'phase':'dependency_resolution','step':index,'return_code':check_code,'detail':check_output[-1000:]}
                 job.environment_spec = spec
                 await session.commit()
-                raise RuntimeError('环境依赖求解失败，未安装该步骤的依赖：' + check_output[-650:])
+                raise RuntimeError(('依赖来源连接失败，未证明版本不兼容，未安装该步骤的依赖：' if kind == 'network' else '环境依赖求解失败，未安装该步骤的依赖：') + check_output[-650:])
         code, output = await _run_environment_operation(
             session, job, workspace, command, timeout, operation_log,
             kind="environment_install", step=index, total_steps=len(commands),
         )
         if (code not in {0, 124} and len(command) >= 4 and command[1:4] == ["-m", "pip", "install"]
-                and re.search(r"ReadTimeout|Connection reset|NewConnectionError|Temporary failure|\b(?:429|502|503)\b",
-                              output, re.I)):
+                and failure_kind(code, output) == 'network'):
             await _advance(session, job, "environment_building", min(90, 83 + index * 2),
                            f"Environment Agent 检测到临时网络错误，重试环境步骤 {index}/{len(commands)}")
             retry_code, retry_output = await _run_environment_operation(
@@ -2970,10 +2973,7 @@ async def _ensure_environment(session, job: ReproductionJob, workspace: Path) ->
             detail = output[-650:].strip().replace("\n", " ")
             spec["last_failure"] = {
                 "step": index, "return_code": code,
-                "kind": "timeout" if code == 124 else
-                        "incompatible_package" if re.search(r"No matching distribution found|PackagesNotFoundError|Requires-Python", output, re.I) else
-                        "network" if re.search(r"ReadTimeout|Connection reset|NewConnectionError|Temporary failure", output, re.I) else
-                        "command_error",
+                "kind": failure_kind(code, output),
                 "detail": detail,
             }
             job.environment_spec = spec

@@ -34,6 +34,7 @@ def test_existing_api_is_not_downgraded_to_satisfy_wheel_profile():
 
 @pytest.mark.parametrize('code,text,kind', [(1, 'No matching distribution found for torch', 'incompatible_package'),
     (1, 'ReadTimeout; No matching distribution found for torch', 'network'),
+    (1, "ProxyError: Cannot connect to proxy; No matching distribution found for torch", 'network'),
     (124, 'command timeout', 'timeout'), (1, 'ResolutionImpossible: conflicting dependencies', 'dependency_conflict')])
 def test_failure_diagnosis_distinguishes_transport_and_compatibility(code, text, kind):
     assert failure_kind(code, text) == kind

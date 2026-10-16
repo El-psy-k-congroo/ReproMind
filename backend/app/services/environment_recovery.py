@@ -19,7 +19,7 @@ def package_name(name):
 def failure_kind(code, output):
     # Network errors may also end in "no matching distribution": check transport first.
     if re.search(r'ReadTimeout|Connection reset|NewConnectionError|Temporary failure|'
-                 r'ConnectionError|SSLError|CERTIFICATE_VERIFY_FAILED|\b(?:429|502|503)\b', output, re.I):
+                 r'ConnectionError|ProxyError|Cannot connect to proxy|SSLError|CERTIFICATE_VERIFY_FAILED|\b(?:429|502|503)\b', output, re.I):
         return 'network'
     if code == 124:
         return 'timeout'
