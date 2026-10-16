@@ -96,11 +96,11 @@ export const api = {
     request<RevisionRunPlan>(`/projects/${projectId}/reproductions/${runId}/revision-run-plan?proposal_id=${encodeURIComponent(proposalId)}`),
   runReadiness: (projectId: string, runId: string) =>
 request<{ datasets: string[]; current_local_dataset_evidence?: Record<string, { path?: string; ready?: boolean; file_count?: number; dataset_variant?: string }>; framework: string; gpu_code_ready: boolean; gpu_code_issues: string[]; device_log_evidence?: Array<{kind: string; log: string; line: string}>; environment_name: string; gpu_environment_plan?: GpuEnvironmentPlan; runtime?: { checked: boolean; version?: string; cuda_build?: string | boolean | null; cuda_available?: boolean; device_count?: number; error?: string }; torch_runtime: { checked: boolean; torch?: string; cuda_build?: string | null; cuda_available: boolean; device_count?: number; error?: string }; note: string }>(`/projects/${projectId}/reproductions/${runId}/run-readiness`),
-  tuningPlan: (projectId: string, runId: string) => request<{ plans: TuningPlan[]; executed: boolean }>(`/projects/${projectId}/reproductions/${runId}/tuning-plan`),
-  startTuning: (projectId: string, runId: string, plans: TuningPlan[]) =>
+  tuningPlan: (projectId: string, runId: string, purpose: 'recovery' | 'validation_optimization' = 'recovery') => request<{ plans: TuningPlan[]; executed: boolean }>(`/projects/${projectId}/reproductions/${runId}/tuning-plan?purpose=${purpose}`),
+  startTuning: (projectId: string, runId: string, plans: TuningPlan[], purpose: 'recovery' | 'validation_optimization' = 'recovery') =>
     request<{ run_id: string; session_id: string }>(`/projects/${projectId}/reproductions/${runId}/tuning-sessions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ datasets: plans.map(plan => plan.dataset), budget: 6,
+      body: JSON.stringify({ datasets: plans.map(plan => plan.dataset), budget: 6, purpose,
         review_tokens: Object.fromEntries(plans.map(plan => [plan.dataset, plan.review_token])) }),
     }),
   rerunDataset: (projectId: string, runId: string, datasets: string[], gpuRequested: boolean, tuningBudget = 0, gpuEnvironmentMigration = false) =>

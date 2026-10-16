@@ -16,7 +16,9 @@ from .tuning import build_tuning_plans, command_fingerprint, validation_score
 APPROVAL_LOCK = asyncio.Lock()  # The application uses one backend worker.
 
 
-def reviewed_plans(job, budget=6):
+def reviewed_plans(job, budget=6, purpose='recovery'):
+    if purpose not in {'recovery', 'validation_optimization'}:
+        raise ValueError('未知搜索目的')
     workspace = Path(job.workspace_path).resolve()
     root = get_settings().paper_projects_dir.resolve()
     if workspace.parent != root or not workspace.name.endswith('-' + job.project_id[:8]):
@@ -33,7 +35,9 @@ def reviewed_plans(job, budget=6):
         log = (workspace / 'runs' / job.id / str(row.get('baseline_log') or '__missing__')).resolve()
         run_root = (workspace / 'runs' / job.id).resolve()
         argv = row.get('baseline_argv')
-        if row.get('return_code') != 0 or row.get('baseline_verdict', row.get('verdict')) != 'deviated':
+        if row.get('return_code') != 0 or not row.get('metrics'):
+            reason = '先完成基线并获得实际指标；搜索不能代替运行纠错'
+        elif purpose == 'recovery' and row.get('baseline_verdict', row.get('verdict')) != 'deviated':
             reason = '仅对已成功执行、经用户复核未复现原因的基线提出恢复搜索'
         elif not argv or argv != command.get('argv'):
             reason = '当前命令与原基线不同，需先独立验证修改后的基线，不能用调参替代纠错'
@@ -48,11 +52,12 @@ def reviewed_plans(job, budget=6):
         elif not plan['trials']:
             reason = '没有可核验的参数空间'
         plan['ready'] = not reason
+        plan['purpose'] = purpose
         plan['blocked_reason'] = reason
         plan['baseline_identity'] = 'fingerprint' if row.get('baseline_fingerprint') else 'legacy_source_timestamps_requires_review'
         # Approval binds source, exact baseline command, measured log and budget together.
         plan['review_token'] = hashlib.sha256(json.dumps({
-            'fingerprint': plan['fingerprint'], 'argv': argv, 'trials': plan['trials'],
+            'fingerprint': plan['fingerprint'], 'argv': argv, 'trials': plan['trials'], 'purpose': purpose,
             'log': hashlib.sha256(log.read_bytes()).hexdigest() if not reason else '',
         }, sort_keys=True).encode()).hexdigest()
     return plans
@@ -60,6 +65,7 @@ def reviewed_plans(job, budget=6):
 
 def new_session(plans):
     return {'id': uuid4().hex, 'status': 'approved', 'plans': plans,
+            'purpose': plans[0].get('purpose', 'recovery') if plans else 'recovery',
             'approved_at': datetime.now(timezone.utc).isoformat(), 'attempts': []}
 
 
@@ -81,7 +87,7 @@ async def execute_tuning_session(job_id, session_id):
             workspace = Path(job.workspace_path).resolve()
             for plan in approved['plans']:
                 await db.refresh(job)
-                checked = next(p for p in reviewed_plans(job, plan['max_trials']) if p['dataset'] == plan['dataset'])
+                checked = next(p for p in reviewed_plans(job, plan['max_trials'], approved.get('purpose', 'recovery')) if p['dataset'] == plan['dataset'])
                 if not checked['ready'] or checked['review_token'] != plan['review_token']:
                     raise ValueError(checked['blocked_reason'] or '批准后源码、命令或基线发生变化，停止搜索')
                 command = next(c for c in job.execution_command['commands'] if c.get('dataset') == plan['dataset'])
@@ -117,9 +123,26 @@ async def execute_tuning_session(job_id, session_id):
                     result['tuning_sessions'] = sessions
                     job.result_json = result
                     await db.commit()
-                records, output, note = await _run_tuning(plan, row['baseline_argv'], cwd,
-                    {'REPROMIND_DATA_DIR': str(workspace / 'data'), 'PYTHONPATH': str(source),
-                     **((job.execution_command.get('runtime_environment') or {}).get('variables') or {})},
+                run_env = {'REPROMIND_DATA_DIR': str(workspace / 'data'), 'PYTHONPATH': str(source),
+                           **((job.execution_command.get('runtime_environment') or {}).get('variables') or {})}
+                required_gpu = bool((job.environment_spec or {}).get('gpu_requested') or
+                                    (job.result_json.get('rerun') or {}).get('gpu_requested'))
+                from .runtime_evidence import gpu_visibility_environment, probe_framework
+                run_env.update(gpu_visibility_environment(required_gpu, run_env))
+                if required_gpu:
+                    from .gpu_preparation import source_framework
+                    from .source_selection import entry_sources, native_path
+                    def selected_framework():
+                        root = native_path(source)
+                        files = {path.relative_to(root).as_posix(): path.read_text(encoding='utf-8', errors='replace')
+                                 for path in entry_sources(root, job.execution_command.get('entrypoint_candidates', [])[:1])
+                                 if path.stat().st_size <= 250_000}
+                        return source_framework(files)
+                    framework = await asyncio.to_thread(selected_framework)
+                    runtime = await probe_framework(python, framework, True, run_env['CUDA_VISIBLE_DEVICES'])
+                    if not runtime.get('compute_checked'):
+                        raise ValueError('调参前 GPU 运算预检失败；不回退 CPU：' + str(runtime.get('error') or framework))
+                records, output, note = await _run_tuning(plan, row['baseline_argv'], cwd, run_env,
                     get_settings().experiment_timeout_seconds, log_root,
                     baseline.read_text(encoding='utf-8', errors='replace'), row.get('metric_key', 'accuracy'), progress, record)
                 result = deepcopy(job.result_json)

@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -45,6 +46,7 @@ class ApprovalOptions(BaseModel):
 
 
 class TuningApproval(BaseModel):
+    purpose: Literal['recovery', 'validation_optimization'] = 'recovery'
     datasets: list[str] = Field(min_length=1, max_length=12)
     budget: int = Field(default=6, ge=1, le=12)
     review_tokens: dict[str, str]
@@ -66,12 +68,13 @@ def _source_changed_after_approval(job):
 
 
 @router.get("/{job_id}/tuning-plan")
-async def tuning_plan(project_id: str, job_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def tuning_plan(project_id: str, job_id: str, db: AsyncSession = Depends(get_db),
+                      purpose: Literal['recovery', 'validation_optimization'] = 'recovery') -> dict:
     job = await db.scalar(select(ReproductionJob).where(
         ReproductionJob.id == job_id, ReproductionJob.project_id == project_id))
     if not job:
         raise HTTPException(status_code=404, detail="复现任务不存在")
-    plans = await asyncio.to_thread(reviewed_plans, job)
+    plans = await asyncio.to_thread(reviewed_plans, job, 6, purpose)
     return {"plans": plans, "executed": False, "requires_approval": True}
 
 
@@ -90,7 +93,7 @@ async def start_tuning_session(project_id: str, job_id: str, payload: TuningAppr
             raise HTTPException(409, '当前实验已有额外搜索或消融正在执行，不能重复批准')
         from .experiment_branches import _ensure_idle
         await _ensure_idle(db, project_id)
-        plans = await asyncio.to_thread(reviewed_plans, job, payload.budget)
+        plans = await asyncio.to_thread(reviewed_plans, job, payload.budget, payload.purpose)
         selected = [p for p in plans if p['dataset'] in payload.datasets]
         if len(selected) != len(set(payload.datasets)):
             raise HTTPException(422, '数据集没有可核验的调参计划')

@@ -107,6 +107,47 @@ def test_changed_source_and_stale_review_cannot_launch(tmp_path, monkeypatch):
     assert exc.value.status_code == 409 and not tasks.tasks
 
 
+@pytest.mark.parametrize('verdict', ['matched', 'result_produced'])
+def test_explicit_validation_optimization_is_not_triggered_by_test_deviation(tmp_path, monkeypatch, verdict):
+    job, _, _ = job_fixture(tmp_path, monkeypatch)
+    for row in job.result_json['dataset_results']:
+        row['verdict'] = verdict
+        row['baseline_verdict'] = verdict
+    original = copy.deepcopy(job.result_json['dataset_results'])
+    recovery = tuning_sessions.reviewed_plans(job)
+    assert not any(plan['ready'] for plan in recovery)
+    optimized = tuning_sessions.reviewed_plans(job, purpose='validation_optimization')
+    assert all(plan['ready'] for plan in optimized)
+    assert all(a['review_token'] != b['review_token'] for a, b in zip(recovery, optimized))
+    async def idle(*args): pass
+    monkeypatch.setattr(experiment_branches, '_ensure_idle', idle)
+    tasks = BackgroundTasks()
+    payload = reproductions.TuningApproval(purpose='validation_optimization', datasets=['graph'],
+        review_tokens={'graph': optimized[0]['review_token']})
+    result = asyncio.run(reproductions.start_tuning_session(job.project_id, job.id, payload, tasks, Session(job)))
+    assert len(tasks.tasks) == 1 and job.result_json['tuning_sessions'][0]['purpose'] == 'validation_optimization'
+    monkeypatch.setattr(tuning_sessions, 'AsyncSessionLocal', lambda: Session(job))
+    async def process(argv, cwd, timeout, env, output_path):
+        output_path.write_text('val_acc=0.8\nTest accuracy=0.5', encoding='utf-8')
+        return 0, output_path.read_text()
+    monkeypatch.setattr(engine, '_run_process', process)
+    monkeypatch.setattr(engine, '_write_reproduction_report', lambda *args: None)
+    asyncio.run(tuning_sessions.execute_tuning_session(job.id, result['session_id']))
+    assert job.result_json['tuning_sessions'][0]['status'] == 'completed'
+    assert job.result_json['dataset_results'] == original
+
+
+def test_validation_optimization_still_requires_real_validation_log_and_unchanged_source(tmp_path, monkeypatch):
+    job, workspace, source = job_fixture(tmp_path, monkeypatch)
+    log=workspace/'runs'/'run'/job.result_json['dataset_results'][0]['baseline_log']
+    log.write_text('Test accuracy=0.9', encoding='utf-8')
+    plan=tuning_sessions.reviewed_plans(job,purpose='validation_optimization')[0]
+    assert not plan['ready'] and '验证集' in plan['blocked_reason']
+    (source/'entry.py').write_text('changed=True', encoding='utf-8')
+    plan=tuning_sessions.reviewed_plans(job,purpose='validation_optimization')[0]
+    assert not plan['ready'] and '源码已改变' in plan['blocked_reason']
+
+
 @pytest.mark.parametrize('failure', ['process', 'no_validation', 'paused'])
 def test_search_error_or_pause_keeps_original_results(tmp_path, monkeypatch, failure):
     job, _, _ = job_fixture(tmp_path, monkeypatch)

@@ -12,31 +12,34 @@ const recoveryOpen = ref(false)
 const recoveryBusy = ref(false)
 const recoveryError = ref('')
 const recoveryReviewed = ref(false)
+const searchPurpose = ref<'recovery' | 'validation_optimization'>('recovery')
 const approvedPlans = computed(() => recoveryPlans.value.filter(plan => plan.ready))
 const parameterText = (value: number) => Number(value.toPrecision(6)).toString()
 const recoveryDatasets = computed(() => results.value.filter(row => row.return_code === 0 && row.verdict === 'deviated' && !row.tuning_selected).map(row => row.dataset))
 const canReviewRecovery = computed(() => props.run.status === 'completed' && !props.run.result_json.tuning_active && recoveryDatasets.value.length > 0)
+const canReviewOptimization = computed(() => props.run.status === 'completed' && !props.run.result_json.tuning_active && results.value.some(row => row.return_code === 0 && Object.keys(row.metrics).length > 0))
 watch(() => props.run.id, () => { recoveryOpen.value = false; recoveryPlans.value = []; recoveryReviewed.value = false; recoveryError.value = '' })
-async function reviewRecovery() {
-  if (recoveryBusy.value || !canReviewRecovery.value) return
+async function reviewRecovery(purpose: 'recovery' | 'validation_optimization' = 'recovery') {
+  if (recoveryBusy.value || !(purpose === 'recovery' ? canReviewRecovery.value : canReviewOptimization.value)) return
+  searchPurpose.value = purpose
   recoveryBusy.value = true; recoveryError.value = ''; recoveryReviewed.value = false
   const id = props.run.id
   try {
-    const response = await api.tuningPlan(props.run.project_id, id)
+    const response = await api.tuningPlan(props.run.project_id, id, purpose)
     if (id !== props.run.id) return
-    recoveryPlans.value = response.plans.filter(plan => recoveryDatasets.value.includes(plan.dataset) && plan.trials.length)
+    recoveryPlans.value = response.plans.filter(plan => (purpose === 'validation_optimization' || recoveryDatasets.value.includes(plan.dataset)) && plan.trials.length)
     recoveryOpen.value = true
     if (!recoveryPlans.value.length) recoveryError.value = '当前源码没有可审查的参数空间；未启动训练或调参。'
   } catch (err) { recoveryError.value = (err as Error).message }
   finally { recoveryBusy.value = false }
 }
 async function startRecovery() {
-  if (recoveryBusy.value || !canReviewRecovery.value || !recoveryReviewed.value || !approvedPlans.value.length) return
+  if (recoveryBusy.value || !(searchPurpose.value === 'recovery' ? canReviewRecovery.value : canReviewOptimization.value) || !recoveryReviewed.value || !approvedPlans.value.length) return
   const datasets = approvedPlans.value.map(plan => plan.dataset)
-  if (!window.confirm(`确认批准恢复搜索：${datasets.join('、')}？\n搜索记录保存在当前实验的“自动调参与修复”，不重跑基线、不新建实验、不覆盖其他结果。\n每个数据集最多 6 组、额外 30 分钟；只用验证集选参，不按测试集选参。\n复用当前环境，不安装依赖。`)) return
+  if (!window.confirm(`确认批准${searchPurpose.value === 'recovery' ? '恢复搜索' : '验证集优化'}：${datasets.join('、')}？\n搜索记录保存在当前实验的“自动调参与修复”，不重跑基线、不新建实验、不覆盖其他结果。\n每个数据集最多 6 组、额外 30 分钟；只用验证集选参，不按测试集选参。\n复用当前环境，不安装依赖。`)) return
   recoveryBusy.value = true; recoveryError.value = ''
   try {
-    const created = await api.startTuning(props.run.project_id, props.run.id, approvedPlans.value)
+    const created = await api.startTuning(props.run.project_id, props.run.id, approvedPlans.value, searchPurpose.value)
     emit('recoveryStarted', created.run_id)
   } catch (err) { recoveryError.value = (err as Error).message }
   finally { recoveryBusy.value = false }
@@ -280,10 +283,12 @@ watch(selectedDataset, chooseDefaultAttempt)
         <div v-for="plan in session.plans" :key="plan.dataset"><p>{{ plan.dataset }} · 最多 {{ plan.max_trials }} 组 / {{ plan.max_seconds / 60 }} 分钟</p><p v-for="item in plan.space" :key="item.parameter">{{ item.parameter }}：基线 {{ parameterText(item.baseline) }}；搜索候选 {{ item.values.map(parameterText).join('、') }}（{{ item.source }}）</p></div>
         <p>{{ session.note }}</p><p v-for="(note, dataset) in session.outcomes || {}" :key="dataset">{{ dataset }}：{{ note }}</p>
       </div>
-      <button v-if="canReviewRecovery" class="button secondary" :disabled="recoveryBusy" @click="reviewRecovery">{{ recoveryBusy ? '正在处理…' : '审查未复现数据集的恢复调参计划（不启动实验）' }}</button>
+      <button v-if="canReviewRecovery" class="button secondary" :disabled="recoveryBusy" @click="reviewRecovery('recovery')">{{ recoveryBusy ? '正在处理…' : '审查未复现数据集的恢复调参计划（不启动实验）' }}</button>
+      <button v-if="canReviewOptimization" class="button secondary" :disabled="recoveryBusy" @click="reviewRecovery('validation_optimization')">审查验证集优化计划（不启动实验）</button>
+      <p v-if="recoveryOpen && searchPurpose === 'validation_optimization'">这是用户主动要求的验证集优化，独立于论文目标是否已知或达标。原基线和论文结论保留；搜索不保证复现论文性能。</p>
       <div v-if="recoveryOpen">
         <div v-for="plan in recoveryPlans" :key="plan.dataset"><strong>{{ plan.dataset }}</strong><p v-for="item in plan.space" :key="item.parameter">{{ item.parameter }}：基线 {{ parameterText(item.baseline) }}；候选 {{ item.values.map(parameterText).join('、') }}；源码 {{ item.source }}</p><p>{{ plan.trials.length }} 组局部/联合组合，最多额外 30 分钟。{{ plan.selection_rule }}；{{ plan.limitation }}</p><details><summary>查看将执行的参数组合</summary><pre>{{ JSON.stringify(plan.trials, null, 2) }}</pre></details><p v-if="plan.blocked_reason" role="alert">不能启动：{{ plan.blocked_reason }}</p><p v-else-if="plan.baseline_identity !== 'fingerprint'">历史基线未保存源码指纹，仅完成日志与源码时间检查，仍需核对基线来源。</p></div>
-        <label v-if="approvedPlans.length"><input v-model="recoveryReviewed" type="checkbox" />已核对数据版本、划分和作者参数；同意仅对未达标基线恢复搜索</label>
+        <label v-if="approvedPlans.length"><input v-model="recoveryReviewed" type="checkbox" />已核对数据版本、划分和作者参数；同意{{ searchPurpose === 'recovery' ? '仅对未达标基线恢复搜索' : '按验证集优化并保留原基线' }}</label>
         <button v-if="approvedPlans.length" class="button primary" :disabled="recoveryBusy || !recoveryReviewed" @click="startRecovery">批准当前实验内调参（保留全部基线）</button>
       </div>
       <p v-if="recoveryError" role="alert">{{ recoveryError }}</p>
