@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: repromind
+      POSTGRES_USER: repromind
+      POSTGRES_PASSWORD: repromind_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - repromind_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repromind"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  repromind_pg:
