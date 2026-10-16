@@ -302,6 +302,7 @@ async def _run_process(
             "GIT_TERMINAL_PROMPT": "0",
             "HF_ENDPOINT": get_settings().hf_endpoint,
             "PYTHONUNBUFFERED": "1",
+            "PYTHONUTF8": "1",
             "CONDA_PKGS_DIRS": str(conda_packages),
         }
     )
