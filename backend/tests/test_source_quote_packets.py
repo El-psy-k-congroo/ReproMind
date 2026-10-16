@@ -26,3 +26,12 @@ def test_contradictory_line_packets_and_reordered_line_numbers_fail_closed():
     assert checked_source_quotes('```python\nL1: x = 1\n```',context)[1]['rejected_blocks']==1
     assert checked_source_quotes('```python\nx = 1\n```',context)[1]['rejected_blocks']==1
     assert checked_source_quotes('```python\nL2: print(x)\nL1: x = 2\n```',context)[1]['rejected_blocks']==1
+def test_uniform_display_dedent_is_allowed_but_conditional_scope_change_is_not():
+    from app.services.source_quotes import checked_source_quotes
+    context = {'packet': {'file': 'network.py', 'code': 'L10:         result = weight * branch + (1-weight) * anchor\nL11:         if self.residual:\nL12:             result = result + previous'}}
+    good = '```python\nresult = weight * branch + (1-weight) * anchor\nif self.residual:\n    result = result + previous\n```'
+    assert checked_source_quotes(good, context)[1]['rejected_blocks'] == 0
+    changed = good.replace('    result = result + previous', 'result = result + previous')
+    assert checked_source_quotes(changed, context)[1]['rejected_blocks'] == 1
+    swapped = good.replace('weight * branch + (1-weight) * anchor', '(1-weight) * branch + weight * anchor')
+    assert checked_source_quotes(swapped, context)[1]['rejected_blocks'] == 1

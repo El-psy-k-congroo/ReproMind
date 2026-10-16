@@ -1,5 +1,21 @@
 """Validate quoted Python against the evidence supplied for this answer."""
 import re
+import textwrap
+
+
+def _same_indented_window(block, packets):
+    """Allow a uniform display dedent, retaining relative Python indentation."""
+    expected = textwrap.dedent(block).strip('\n')
+    size = len(expected.splitlines())
+    if not size:
+        return False
+    for packet in packets:
+        lines = packet.splitlines()
+        for start in range(len(lines) - size + 1):
+            window = '\n'.join(lines[start:start + size])
+            if textwrap.dedent(window).strip('\n') == expected:
+                return True
+    return False
 
 
 def checked_source_quotes(answer, context):
@@ -43,7 +59,7 @@ def checked_source_quotes(answer, context):
             valid = valid and len(cited) == len([line for line in block.splitlines() if line.strip()])
             valid = valid and [int(row[1]) for row in cited]==sorted({int(row[1]) for row in cited})
         else:
-            valid = any(block in packet for packet in plain)
+            valid = _same_indented_window(block, plain)
         if valid: return match[0]
         rejected += 1
         return '> 此处源码引文与本次读取的原文不一致，已移除；不能据此判断代码实现。'
