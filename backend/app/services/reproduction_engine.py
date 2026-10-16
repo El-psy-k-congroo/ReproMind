@@ -2401,9 +2401,17 @@ def _primary_metric(paper_spec: dict[str, Any], metrics: dict[str, float]) -> st
 
 def _diagnose_failure(output: str, cwd: Path | None = None, dataset: str = "") -> dict[str, str]:
     kind, detail = terminal_exception(output)
-    if kind.rsplit('.',1)[-1] in {'SSLError','ConnectError','ConnectionError','ReadTimeout','ConnectTimeout','RemoteProtocolError'} and re.search(r'https?://|HTTPSConnectionPool|requests[\\/]|urllib|httpx',output,re.I):
+    if kind.rsplit('.',1)[-1] in {'SSLError','ConnectError','ConnectionError','ReadTimeout','ConnectTimeout',
+            'RemoteProtocolError','ChunkedEncodingError','ContentDecodingError','ProtocolError','HTTPError',
+            'ReadTimeoutError','ConnectTimeoutError','MaxRetryError','IncompleteRead'} and re.search(
+            r'https?://|HTTPSConnectionPool|requests[\\/]|urllib|httpx',output,re.I):
         return {'type':'network_download','reason':kind+': '+detail[:600],
                 'suggestion':'已知下载来源发生网络、TLS 或远端连接错误；获取未完成，不等于作者缺少数据。保留下载证据，网络恢复后重试作者来源；不通过关闭 TLS 校验或修改模型来伪装成功。'}
+    if (kind.rsplit('.',1)[-1] in {'RuntimeError','EOFError','UnpicklingError'}
+            and re.search(r'\b(?:torch\.load|load_state_dict|load_checkpoint)\b',output)
+            and re.search(r'unexpected EOF|ran out of input|pickle data was truncated|failed finding central directory',detail,re.I)):
+        return {'type':'model_artifact_incomplete','reason':kind+': '+detail[:600],
+                'suggestion':'模型权重或检查点不完整，不能用改模型或放宽加载检查替代完整文件。保留失败文件及日志，核对作者来源的大小和校验和后重新获取；不要求补交训练数据。'}
     dependency_plan = compatibility_plan(output)
     if dependency_plan:
         return {'type':'dependency_api_incompatible','suggestion':dependency_plan['reason']}
@@ -4362,8 +4370,10 @@ async def execute_reproduction(job_id: str) -> None:
                     output += ('\n[RuntimeOutputMissing] 作者入口退出，但未产出本次要求的全部评估指标：'
                                + ','.join(sorted(required_metrics)) + '。只可修正已有作者评估调用或真实结果记录，不得打印固定指标或改变模型和测试数据。')
                 seen_errors: set[str] = set()
-                environment_or_path_failure=_diagnose_failure(output,cwd,dataset).get('type') in {'dependency_platform_incompatible','network_download'}
-                if (return_code not in {0, 124} or return_code == 0 and output_incomplete()) and source_repair_allowed() and not environment_or_path_failure:
+                def environment_or_path_failure():
+                    return _diagnose_failure(output,cwd,dataset).get('type') in {
+                        'dependency_platform_incompatible','network_download','model_artifact_incomplete'}
+                if (return_code not in {0, 124} or return_code == 0 and output_incomplete()) and source_repair_allowed() and not environment_or_path_failure():
                     try:
                         argv, cwd, item_env, output, isolated = await asyncio.to_thread(
                             isolate_failed_command, job, workspace, dataset, argv, cwd, item_env, output)
@@ -4376,7 +4386,7 @@ async def execute_reproduction(job_id: str) -> None:
                         repairs.append({'dataset': dataset, 'type': 'repair_isolation_blocked', 'reason': str(exc)})
                 try:
                     for repair_attempt in range(1, 3):
-                        if return_code == 124 or return_code == 0 and not output_incomplete() or not source_repair_allowed() or environment_or_path_failure:
+                        if return_code == 124 or return_code == 0 and not output_incomplete() or not source_repair_allowed() or environment_or_path_failure():
                             break
                         signature = "\n".join(output.splitlines()[-6:])
                         if signature in seen_errors:
