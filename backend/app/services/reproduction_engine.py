@@ -2826,7 +2826,9 @@ async def _refresh_reviewed_dependencies(job, workspace):
         path = candidate.resolve()
         if source not in path.parents or not path.is_file() or candidate.is_symlink():
             raise ValueError('已审查依赖文件不存在或越界，不能沿用旧安装计划')
-        fingerprints[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Preview/application hashes use text snapshots. Windows writes may
+        # use CRLF; compare the same newline-normalized UTF-8 representation.
+        fingerprints[name] = hashlib.sha256(path.read_text(encoding='utf-8').encode('utf-8')).hexdigest()
         if fingerprints[name] != expected[name]:
             raise ValueError('依赖文件已偏离审查后的版本，不能自动安装；请重新生成并审查提案')
     if original.get('reviewed_dependency_sha256') == fingerprints:

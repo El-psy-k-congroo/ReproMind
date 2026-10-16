@@ -11,11 +11,11 @@ from app.services import host_environment
 
 def test_reviewed_dependency_change_rebuilds_plan_preserving_environment(tmp_path, monkeypatch):
     source = tmp_path/'source';source.mkdir()
-    requirements = source/'requirements.txt';requirements.write_text('numpy==1.26.4\n')
+    requirements = source/'requirements.txt';requirements.write_bytes(b'numpy==1.26.4\r\n')
     (source/'run.py').write_text('import numpy\n')
     old = tmp_path/'envs'/'original';fresh = tmp_path/'envs'/'new'
     python = str(engine._environment_python(old))
-    fingerprint = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    fingerprint = hashlib.sha256(b'numpy==1.26.4\n').hexdigest()
     job = SimpleNamespace(id='run', execution_command={'pythonpath':str(source),'entrypoint_candidates':['run.py']},
         paper_spec={'model_name':'Example'},result_json={},environment_spec={
             'prefix':str(old),'environment_name':'original','recheck_on_run':True,
