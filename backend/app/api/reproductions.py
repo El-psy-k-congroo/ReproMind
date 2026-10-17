@@ -53,6 +53,8 @@ class TuningApproval(BaseModel):
 
 
 def _source_changed_after_approval(job):
+    if getattr(job, 'approved_at', None) is None:
+        return False
     revisions = (job.result_json or {}).get('code_revisions') or []
     if not revisions: return False
     try:

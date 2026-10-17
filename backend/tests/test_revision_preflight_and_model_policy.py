@@ -42,6 +42,24 @@ def test_idle_author_source_can_be_revised_before_first_run(tmp_path,monkeypatch
     assert bool(refreshed)==(state==ReproductionStatus.awaiting_approval)
 
 
+def test_failed_unapproved_revision_can_reprepare_without_starting_experiment(monkeypatch):
+    from app.api import reproductions
+    from fastapi import BackgroundTasks
+    job=SimpleNamespace(id='run',status=ReproductionStatus.failed,approved_at=None,progress=80,
+        result_json={'code_revisions':[{'applied_at':'2026-10-17T01:00:00+00:00'}]})
+    values=iter([job,None])
+    class DB:
+        async def scalar(self,*args):return next(values)
+        async def commit(self):pass
+        async def refresh(self,*args):pass
+    monkeypatch.setattr(reproductions,'has_active_work',lambda *args:False)
+    tasks=BackgroundTasks()
+    result=asyncio.run(reproductions.resume_reproduction('project','run',tasks,DB()))
+    assert result.status==ReproductionStatus.queued and result.approved_at is None
+    assert tasks.tasks[0].func==reproductions.prepare_reproduction
+    assert reproductions._source_changed_after_approval(SimpleNamespace(approved_at='invalid',result_json=job.result_json))
+
+
 def fixture_proposal(tmp_path):
     body = 'import tensorflow as tf\n'
     (tmp_path / 'train.py').write_text(body, encoding='utf-8')
