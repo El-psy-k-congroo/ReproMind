@@ -38,9 +38,13 @@ def rank_entries(source, manifest, goal):
             if name not in entries: entries.append(name)
     def score(entry):
         evidence = entry + '\n'
+        documented_datasets = set()
         for command in manifest.get('readme_commands', []):
             if command['entrypoint'] == entry:
                 evidence += ' '.join(command['args']) + '\n'
+                from .cli_contract import option_values
+                for flag in ['--dataset','--datasets','--data','--dataset-id','--dataset_id']:
+                    documented_datasets.update(value.casefold() for value in option_values(command['args'],flag))
         path = source / entry
         if path.is_file():
             evidence += path.read_text(encoding='utf-8', errors='replace')[:100_000]
@@ -51,6 +55,9 @@ def rank_entries(source, manifest, goal):
                     12 if re.sub(r'[^a-z0-9]', '', token) in normalized else
                     2 if token in evidence.casefold() else 0 for token in tokens)
         value -= sum(100 for token in negative if re.sub(r'[^a-z0-9]', '', token) == stem)
+        # A dataset in an executable usage example is stronger than a name
+        # mentioned in a shared registry or unrelated branch of another file.
+        value += 40 * len(tokens & documented_datasets)
         if not training:
             value += 25 if re.search(r'(?:^|[_/])(?:eval|test|sample|sampling|encode|decode|predict|infer|compressor)(?:[_/.]|$)', entry,re.I) else 0
             value -= 15 if re.search(r'(?:^|[_/])train(?:ing)?[^/]*\.py$', entry,re.I) else 0

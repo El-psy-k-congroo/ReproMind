@@ -1,5 +1,19 @@
 """Inspect literal CLI requirements without importing or executing author code."""
 import ast
+import re
+
+
+def option_values(argv, option):
+    """Read both --flag=value and --flag value forms, including nargs lists."""
+    for index, token in enumerate(argv):
+        if token == option:
+            end = index + 1
+            while end < len(argv) and not re.match(r'^--?[A-Za-z_]', str(argv[end])):
+                end += 1
+            return list(argv[index+1:end])
+        if str(token).startswith(option + '='):
+            return [str(token).split('=',1)[1]]
+    return []
 
 
 def missing_required_options(body, argv):

@@ -1404,19 +1404,25 @@ def _execution_command(
 
         entry_text = entry_path.read_text(encoding="utf-8", errors="replace") if entry_path.is_file() else ""
         examples = [item for item in manifest.get('readme_commands', []) if item['entrypoint'] == entry]
-        dataset_flag_match = re.search(r"(?:add_argument|option)\s*\(\s*['\"](--(?:dataset|data))['\"]", entry_text, re.I)
+        dataset_flag_match = re.search(r"(?:add_argument|option)\s*\(\s*['\"](--(?:datasets?|data|dataset[-_]id))['\"]", entry_text, re.I)
         dataset_flag = dataset_flag_match.group(1) if dataset_flag_match else '--dataset'
         supports_dataset_arg = bool(dataset_flag_match or re.search(r"\bDEFINE_(?:string|enum)\s*\(\s*['\"]dataset['\"]", entry_text))
+        from .cli_contract import option_values
         if runnable_datasets and examples and all(any(
-                dataset_flag in example['args'] and example['args'].index(dataset_flag) + 1 < len(example['args'])
-                and example['args'][example['args'].index(dataset_flag) + 1].casefold() == repository_name.casefold()
+                repository_name.casefold() in {value.casefold() for value in option_values(example['args'], dataset_flag)}
                 for example in examples) for _, repository_name in runnable_datasets):
             commands = []
             for label, repository_name in runnable_datasets:
-                example = next(item for item in examples if dataset_flag in item['args']
-                               and item['args'].index(dataset_flag) + 1 < len(item['args'])
-                               and item['args'][item['args'].index(dataset_flag) + 1].casefold() == repository_name.casefold())
-                commands.append({'argv': [*base, *example['args']], 'cwd': str(cwd), 'dataset': label,
+                example = next(item for item in examples if repository_name.casefold() in {
+                    value.casefold() for value in option_values(item['args'],dataset_flag)})
+                args = list(example['args'])
+                position = next(i for i,value in enumerate(args) if value == dataset_flag or value.startswith(dataset_flag+'='))
+                if args[position] == dataset_flag:
+                    end = position + 1 + len(option_values(args,dataset_flag))
+                    args[position:end] = [dataset_flag,repository_name]
+                else:
+                    args[position] = dataset_flag+'='+repository_name
+                commands.append({'argv': [*base, *args], 'cwd': str(cwd), 'dataset': label,
                                  'command_source': example['readme']})
         elif runnable_datasets and supports_dataset_arg and entry.endswith(".py"):
             commands = [
