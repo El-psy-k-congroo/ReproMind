@@ -933,7 +933,7 @@ def _workspace_context(context, job, workspace, question, terms,
                                            for label,path in list(configs.items())[:2]]
         selected_files = entry_sources(sources, question_entries[:1])
         from ..services.source_calculations import calculation_packets, numbered_code, configured_model_names
-        from ..services.source_class_context import class_bindings, enclosing_class
+        from ..services.source_class_context import class_bindings, enclosing_class, factory_bindings
         model_names = configured_model_names(job.execution_command)
         source_trees = {}
         implementation, named_implementation, structure, named_functions, optimizers, calculations = [], [], [], [], [], []
@@ -988,6 +988,8 @@ def _workspace_context(context, job, workspace, question, terms,
                             'code':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(begin,end))})
         binding = class_bindings(source_trees, question_entries[:1], model_names)
         task_evidence['selected_class_binding_not_execution_proof'] = binding
+        task_evidence['selected_factory_calls_not_execution_proof'] = factory_bindings(
+            source_trees,question_entries[:1],(job.execution_command or {}).get('commands') or [])
         if binding['unambiguous']:
             active_classes = set(binding['reachable'])
             named_implementation = [row for row in named_implementation if row['symbol'].split('.')[0] in active_classes]
@@ -1737,8 +1739,10 @@ async def stream_answer(
                 "解释计算时逐项核对当前源码的运算顺序、分支和激活位置；不能凭记忆拼出不同的总公式。"
                 "方法解释优先按源码的赋值顺序逐步说明，不自行合并成总公式；系数必须和其所乘表达式一一对应。"
                 "constructor_signature_from_static_ast记录默认开关，construction_sites_from_static_ast记录静态传参；"
+                "selected_factory_calls_not_execution_proof还核对本次CLI条件和工厂默认值；默认关闭的可选分支不能用来解释本次所选分类头或损失。"
                 "必须结合两者及本次命令核对可选分支。条件成立才执行的操作不得写成必然执行，也不能把内部残差移到外部激活之后。"
                 "原文公式无法可靠对应时，给出当前源码中的逐行计算步骤并解释变量，不编造等价公式。"
+                "若未读取具体损失实现，不提供推测的具体损失公式；只说明已核验的接口与尚缺证据，不能以通用公式代替当前实现。"
                 "question_calculations_not_execution_proof包含所问指标和预处理的原文，即使函数名未提到指标也应读取。"
                 "线性层输入维数只是中间特征宽度，不能当作原始输入元素数；未核验全部输入维度、序列长度和存储格式时不计算压缩率。"
                 "上下文截短仅表示未展示，不得据此断言仓库缺实现、归档无公开测试数据或下载失败。"

@@ -5,7 +5,7 @@ import json
 def whole_source_packets(evidence, budget):
     if not isinstance(evidence, dict):
         return evidence
-    order = ['named_implementations', 'question_calculations_not_execution_proof',
+    order = ['selected_factory_calls_not_execution_proof','named_implementations', 'question_calculations_not_execution_proof',
              'author_configs', 'explicitly_named_functions', 'loss_assignments',
              'optimizer_assignments', 'static_model_attributes_not_runtime_shapes']
     packed = {key: value for key, value in evidence.items() if not isinstance(value, list)}
