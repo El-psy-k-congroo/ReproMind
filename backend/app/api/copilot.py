@@ -1446,6 +1446,10 @@ def _tuning_plan_answer(context: dict, question: str) -> str:
         lines.extend(['', '数据集：' + '、'.join(group['datasets']), '', '| 参数 | 当前基线 | 候选值 | 源码依据 |', '|---|---:|---|---|'])
         for item in plan['space']:
             lines.append(f"| `{item['parameter']}` | {number(item['baseline'])} | {', '.join(number(value) for value in item['values'])} | `{item['source']}` |")
+        if plan.get('fixed_protocol_parameters'):
+            lines.append('\n固定的实验协议（不参与选优）：' + '、'.join(
+                f"`{item['parameter']}`={number(item['baseline'])}" for item in plan['fixed_protocol_parameters'])
+                + '。随机种子与每类样本规模不按验证集分数选择。')
         lines.append(f"\n每个数据集最多 {len(plan['trials'])} 次单参数／联合尝试，累计额外预算 {plan['max_seconds'] // 60} 分钟。")
     lines.append('\n范围是围绕当前配置的局部建议，不是论文指定的搜索范围，也不保证最优。只用验证集选参；缺少验证指标或试验失败就停止额外搜索。基线单独保留，测试指标不触发搜索、不用于选参。需要在实验确认区单独批准后才运行。')
     return '\n'.join(lines)

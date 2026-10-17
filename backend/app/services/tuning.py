@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 from .source_selection import entry_sources, native_path
 from .hyperparameter_contract import declared_domains, dataclass_defaults, command_config, flat_values, configuration_domains
@@ -15,6 +16,13 @@ GROUPS = {
     'hidden_size': ('hidden1', 'hidden_dim', 'hidden_size', 'nhid', 'hidden'),
     'batch_size': ('batch_size', 'batch-size'),
 }
+
+
+def protocol_parameter(name):
+    leaf = name.removeprefix('config:').split('.')[-1]
+    return re.sub(r'[-_]', '', leaf).casefold() in {
+        'seed','seeds','randomseed','randomseeds','randomstate','dataseed','splitseed','samplingseed',
+        'samplesizes','samplesperclass','numsamplesperclass','nshot','kshot','shotsperclass'}
 
 
 def numeric_flags(text):
@@ -135,6 +143,12 @@ def build_tuning_plans(job, budget=6):
         config_defaults = flat_values(binding['data']) if binding else {}
         domain_warnings = []
         domains.update(configuration_domains(source, binding,domain_warnings))
+        fixed_protocol = []
+        for name in [*declarations,*('config:'+key for key in config_defaults)]:
+            if not protocol_parameter(name):continue
+            value = config_defaults[name[7:]] if name.startswith('config:') else _current_value(command.get('argv',[]),name,declarations[name])
+            fixed_protocol.append({'parameter':name,'baseline':value,
+                'reason':'随机种子与每类样本规模属于实验协议，保持当前值，不按验证集分数选择'})
         space, baseline = [], {}
         grouped_parameters = []
         for group, aliases in GROUPS.items():
@@ -160,6 +174,7 @@ def build_tuning_plans(job, budget=6):
                           'reason': f"作者声明范围：{domain['origin']}，L{domain['line']}" if domain else '围绕当前已声明参数做局部搜索；不是论文指定的搜索范围'})
         represented = {row['parameter'] for row in space}
         for name, domain in domains.items():
+            if protocol_parameter(name):continue
             if name in represented: continue
             if name.startswith('config:'):
                 if name[7:] not in config_defaults: continue
@@ -198,6 +213,7 @@ def build_tuning_plans(job, budget=6):
         plans.append({'dataset': command.get('dataset'), 'strategy': 'bounded_coordinate_then_joint',
                       'declared_parameters': {name:_current_value(command.get('argv',[]),name,value) for name,value in declarations.items()},
                       'parameters_without_search_domain': [name for name in declarations if name not in {item['parameter'] for item in space}],
+                      'fixed_protocol_parameters':fixed_protocol,
                       'config_binding': {key:value for key,value in binding.items() if key!='data'} if binding else None,
                       'space': space, 'baseline_parameters': baseline, 'trials': unique[:budget] if fingerprint else [],
                       'parameters_not_covered_by_budget': uncovered,
