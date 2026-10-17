@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { selectedTuningMetrics } from '../tuningResults'
 import { runDatasetScope } from '../runScope'
+import { curveSamples, nearestSample } from '../curveSamples'
 import type { DatasetResult, ReproductionActivity, ReproductionRun, TelemetryPoint, TelemetrySeries, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun }>()
@@ -75,7 +76,7 @@ const comparisonRows = computed<DatasetResult[]>(() => {
 const elapsed = computed(() => results.value.reduce((sum, item) => sum + (item.wall_time_seconds || 0), 0))
 const repairs = computed(() => props.run.result_json.repair_attempts?.length || 0)
 const tunings = computed(() => props.run.result_json.tuning_attempts || [])
-const metricNames: Record<string, string> = { acc: 'Accuracy', accuracy: 'Accuracy', auc: 'AUC', auroc: 'AUC', aupr: 'AUPR', f1: 'F1', loss: 'Loss', rmse: 'RMSE', mae: 'MAE', mse: 'MSE', prd: 'PRD', cr: 'CR', fid: 'FID', perplexity: 'Perplexity', top1error: 'Top-1 Error', top5error: 'Top-5 Error', bleu: 'BLEU', rouge: 'ROUGE', precision: 'Precision', recall: 'Recall' }
+const metricNames: Record<string, string> = { acc: 'Accuracy', accuracy: 'Accuracy', auc: 'AUC', auroc: 'AUC', aupr: 'AUPR', f1: 'F1', loss: 'Loss', embedding_loss: 'Embedding Loss', rmse: 'RMSE', mae: 'MAE', mse: 'MSE', prd: 'PRD', cr: 'CR', fid: 'FID', perplexity: 'Perplexity', top1error: 'Top-1 Error', top5error: 'Top-5 Error', bleu: 'BLEU', rouge: 'ROUGE', precision: 'Precision', recall: 'Recall' }
 const preferredMetrics = computed(() => (props.run.paper_spec.metrics as string[] | undefined || []).map(item => item.toLowerCase()))
 const metricKeys = computed(() => {
   const available = [...new Set((current.value?.points || []).flatMap(point => Object.keys(point).filter(key => key !== 'epoch' && typeof point[key] === 'number')))]
@@ -104,10 +105,13 @@ function bounds(key: string) {
   return { min: min - padding, max: max + padding, values }
 }
 function line(key: string): string {
-  const points = (current.value?.points || []).filter(point => point[key] !== undefined)
+  const points = samples(key)
   if (points.length < 2) return ''
+  return points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ')
+}
+function samples(key: string) {
   const { min, max } = bounds(key)
-  return points.map((point, index) => `${index ? 'L' : 'M'}${48 + index * 388 / (points.length - 1)},${130 - (point[key]! - min) * 100 / (max - min)}`).join(' ')
+  return curveSamples(current.value?.points || [], key, min, max)
 }
 function number(value: number | undefined, key: string): string {
   if (value === undefined || !Number.isFinite(value)) return '—'
@@ -161,18 +165,14 @@ function datasetColor(dataset: string): string {
   return datasetPalette[Math.max(0, index) % datasetPalette.length]
 }
 function curvePoint(key: string, index: number) {
-  const points = (current.value?.points || []).filter(point => point[key] !== undefined)
-  const point = points[index]
-  if (!point || points.length < 2) return null
-  const range = bounds(key)
-  return { x: 48 + index * 388 / (points.length - 1), y: 130 - (point[key]! - range.min) * 100 / (range.max - range.min), point }
+  return samples(key)[index] || null
 }
 function hoverCurve(event: MouseEvent, key: string) {
-  const points = (current.value?.points || []).filter(point => point[key] !== undefined)
+  const points = samples(key)
   if (!points.length) return
   const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect()
   const x = (event.clientX - rect.left) / rect.width * 470
-  curveHover.value = { key, index: Math.max(0, Math.min(points.length - 1, Math.round((x - 48) / 388 * (points.length - 1)))) }
+  curveHover.value = { key, index: nearestSample(points, x) }
 }
 async function refreshPaperTargets() {
   if (loadingPaperTargets.value) return
@@ -236,7 +236,7 @@ watch(selectedDataset, chooseDefaultAttempt)
     <div v-if="loadError" class="alert error">{{ loadError }}</div>
     <div class="chart-selection"><label>数据集<select v-model="selectedDataset"><option v-for="dataset in datasets" :key="dataset">{{ dataset }}</option></select></label><label>实验轮次<select v-model="selectedAttempt"><option v-for="attempt in attempts" :key="attempt.attempt" :value="attempt.attempt">{{ attempt.attempt }}</option></select></label><small>{{ metricKeys.length === 1 && metricKeys[0].includes('loss') ? '作者日志当前仅逐轮输出损失；其他指标须在评估产生后展示。' : '仅显示与论文指标最相关的最多 3 条曲线；未伪造缺失指标。' }}</small></div>
     <div v-if="metricKeys.length" class="experiment-charts" :class="{ 'three-charts': metricKeys.length === 3 }">
-      <article v-for="key in metricKeys" :key="key" class="experiment-chart-card chart-interactive"><div class="chart-heading"><div><small>训练过程</small><h3>{{ metricTitle(key) }}</h3></div><strong>{{ number(latest(current?.points, key), key) }}</strong></div><svg viewBox="0 0 470 170" role="img" :aria-label="`${selectedDataset} ${metricTitle(key)} 曲线`" @mousemove="hoverCurve($event, key)" @mouseleave="curveHover = null"><path class="chart-gridline" d="M48 30 H436 M48 80 H436 M48 130 H436"/><text x="4" y="34">{{ number(bounds(key).max, key) }}</text><text x="4" y="84">{{ number((bounds(key).max + bounds(key).min) / 2, key) }}</text><text x="4" y="134">{{ number(bounds(key).min, key) }}</text><text x="48" y="160">{{ current?.points[0]?.epoch ?? 0 }}</text><text x="407" y="160">{{ current?.points.at(-1)?.epoch ?? 0 }}</text><path v-if="line(key)" class="chart-line" :class="key.includes('loss') ? 'loss-line' : 'accuracy-line'" :d="line(key)"/><template v-if="curveHover?.key === key && curvePoint(key, curveHover.index)"><path class="chart-cursor" :d="`M${curvePoint(key, curveHover.index)!.x} 30 V130`"/><circle class="chart-focus" :cx="curvePoint(key, curveHover.index)!.x" :cy="curvePoint(key, curveHover.index)!.y" r="5" /></template></svg><div v-if="curveHover?.key === key && curvePoint(key, curveHover.index)" class="chart-tooltip" :style="{ left: `${Math.max(15, Math.min(75, curvePoint(key, curveHover.index)!.x / 470 * 100))}%` }">第 {{ curvePoint(key, curveHover.index)!.point.epoch }} 轮 · {{ number(curvePoint(key, curveHover.index)!.point[key], key) }}</div><p>训练轮次 → · {{ current?.points.length || 0 }} 个日志采样点 · 鼠标移动可查看真实数值</p></article>
+      <article v-for="key in metricKeys" :key="key" class="experiment-chart-card chart-interactive"><div class="chart-heading"><div><small>训练过程</small><h3>{{ metricTitle(key) }}</h3></div><strong>{{ number(latest(current?.points, key), key) }}</strong></div><svg viewBox="0 0 470 170" role="img" :aria-label="`${selectedDataset} ${metricTitle(key)} 曲线`" @mousemove="hoverCurve($event, key)" @mouseleave="curveHover = null"><path class="chart-gridline" d="M48 30 H436 M48 80 H436 M48 130 H436"/><text x="4" y="34">{{ number(bounds(key).max, key) }}</text><text x="4" y="84">{{ number((bounds(key).max + bounds(key).min) / 2, key) }}</text><text x="4" y="134">{{ number(bounds(key).min, key) }}</text><text x="48" y="160">{{ current?.points[0]?.epoch ?? 0 }}</text><text x="407" y="160">{{ current?.points.at(-1)?.epoch ?? 0 }}</text><path v-if="line(key)" class="chart-line" :class="key.includes('loss') ? 'loss-line' : 'accuracy-line'" :d="line(key)"/><circle v-for="(sample, sampleIndex) in samples(key)" :key="sampleIndex" class="chart-focus chart-sample" :cx="sample.x" :cy="sample.y" r="3"/><template v-if="curveHover?.key === key && curvePoint(key, curveHover.index)"><path class="chart-cursor" :d="`M${curvePoint(key, curveHover.index)!.x} 30 V130`"/><circle class="chart-focus" :cx="curvePoint(key, curveHover.index)!.x" :cy="curvePoint(key, curveHover.index)!.y" r="5" /></template></svg><div v-if="curveHover?.key === key && curvePoint(key, curveHover.index)" class="chart-tooltip" :style="{ left: `${Math.max(15, Math.min(75, curvePoint(key, curveHover.index)!.x / 470 * 100))}%` }">第 {{ curvePoint(key, curveHover.index)!.point.epoch }} 轮 · {{ number(curvePoint(key, curveHover.index)!.point[key], key) }}</div><p>训练轮次 → · {{ samples(key).length }} 个日志采样点 · 鼠标移动可查看真实数值</p></article>
     </div>
     <div v-else class="experiment-chart-card chart-empty">等待可解析的训练指标。该仓库若不输出逐轮指标，原始日志仍可查看。</div>
     <div class="experiment-chart-card result-comparison">

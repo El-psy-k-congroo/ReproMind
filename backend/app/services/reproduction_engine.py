@@ -2383,8 +2383,9 @@ def _extract_metrics(output: str) -> dict[str, float]:
 
 
 def _unscoped_metrics(output: str) -> dict[str, float]:
+    from .scalar_log_records import normalize_scalar_logs
     metrics: dict[str, float] = {}
-    for name, value, percent in METRIC_PATTERN.findall(output):
+    for name, value, percent in METRIC_PATTERN.findall(normalize_scalar_logs(output)):
         key = name.lower().replace("accuracy", "acc")
         if re.match(r'top[ -]?[15]',key): key = re.sub(r'[^a-z0-9]','',key).replace('err','error') if not key.endswith('error') else re.sub(r'[^a-z0-9]','',key)
         numeric = float(value)

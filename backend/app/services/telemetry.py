@@ -3,11 +3,12 @@
 import re
 import math
 from pathlib import Path
+from .scalar_log_records import normalize_scalar_line
 
-EPOCH = re.compile(r"\b[Ee]poch\s*[:=]?\s*\[?\s*(\d+)(?:\s*/\s*\d+)?", re.IGNORECASE)
+EPOCH = re.compile(r"\b[Ee]poch\s*[:=]?\s*\[?\s*(\d+(?:\.\d+)?)(?:\s*/\s*\d+)?", re.IGNORECASE)
 FOLD = re.compile(r"\b(?:test[_\s-]*fold|fold)\s*[:=]?\s*(\d+)", re.IGNORECASE)
 METRIC = re.compile(
-    r"\b((?:(?:train|training|val|valid|validation|test)[_\s]+)?(?:avg[_\s]*loss|loss|acc(?:uracy)?|auc|auroc|aupr|f1|"
+    r"\b((?:(?:train|training|val|valid|validation|test)[_\s]+)?(?:avg[_\s]*loss|embedding_loss|loss|acc(?:uracy)?|auc|auroc|aupr|f1|"
     r"rmse|mae|mse|prd|cr|fid|perplexity|top[_ -]?[15][ _-]*(?:err(?:or)?)|bleu|rouge|precision|recall))\s*(?:[:=]|\s)\s*(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(%?)",
     re.IGNORECASE,
 )
@@ -30,13 +31,16 @@ def parse_experiment_log(path: Path, *, dataset: str = '', attempt: str = '') ->
     active_epoch = None
     active_fold = None
     for line in text.splitlines():
-        if re.search(r'\bfinal\s+(?:evaluation|test)|\bload(?:ing)?\s+\d+(?:st|nd|rd|th)?\s+epoch',line,re.I):
+        line = normalize_scalar_line(line)
+        if re.search(r'\bfinal\s+(?:evaluation|test)|\brunning\s+evaluation\b|\bload(?:ing)?\s+\d+(?:st|nd|rd|th)?\s+epoch',line,re.I):
             active_epoch = None
             active_fold = None
         epoch = EPOCH.search(line)
         fold = FOLD.search(line)
         if epoch:
-            active_epoch = int(epoch.group(1))
+            active_epoch = float(epoch.group(1))
+            if active_epoch.is_integer():
+                active_epoch = int(active_epoch)
             if fold: active_fold = int(fold.group(1))
         parts = list(re.finditer(r'\b(train(?:ing)?|val(?:id(?:ation)?)?|test)\b',line,re.I))
         if active_epoch is None or (not epoch and not parts):
@@ -63,7 +67,7 @@ def parse_experiment_log(path: Path, *, dataset: str = '', attempt: str = '') ->
             from .metric_contract import metric_name
             prefix = re.match(r'^(train|val|test)_', normalized)
             bare = normalized[prefix.end():] if prefix else normalized
-            canonical = metric_name(bare)
+            canonical = 'embedding_loss' if bare == 'embedding_loss' else metric_name(bare)
             canonical = 'acc' if canonical == 'accuracy' else canonical
             normalized = (prefix[0] if prefix else '') + canonical
             numeric = float(value)
