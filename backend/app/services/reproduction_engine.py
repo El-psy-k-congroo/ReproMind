@@ -2616,6 +2616,7 @@ async def _agent_repair_code(
             prior_experience = await _prior_repair_experience(job, dataset, source, failure_type)
         except Exception:
             prior_experience = []  # Missing history must never prevent a current-run repair.
+        from .runtime_repair_evidence import failed_candidates
         prompt = json.dumps({
             "dataset": dataset, "paper_spec": job.paper_spec, "goal":getattr(job,'goal',''),
             "device_requirement":getattr(job,'environment_spec',{}).get('hardware_plan',{}),
@@ -2624,6 +2625,7 @@ async def _agent_repair_code(
             "source_start_line": max(1, line_number - 24), "failure_tail": failure,
             "related_function_interfaces": provider_context(Path(run_env.get('PYTHONPATH') or cwd), source),
             "prior_repair_outcomes": prior_experience,
+            'current_run_failed_candidates':failed_candidates(job,workspace,dataset,source),
             'task_contract': task_contract(job), 'diagnosis':_diagnose_failure(output,cwd,dataset),
         }, ensure_ascii=False)
         try:
@@ -2632,6 +2634,8 @@ async def _agent_repair_code(
                 "你是论文复现代码修复 Agent。根据真实异常和源码，只返回 JSON: old_text, new_text, rationale。"
                 "仅修改报错文件中与异常直接相关的一小段代码，old_text 必须逐字出现在所给源码片段中，保留原缩进，不添加行号。"
                 "task_contract给出本次数据、命令、设备和环境，不得修复同名的其他示例。Windows输出长路径可缩短日志/检查点目录并保留实验标识；不得改数据或覆盖历史实验。"
+                "平台提供 REPROMIND_OUTPUT_DIR 和 REPROMIND_DATA_DIR；输出路径修复应核对实际调用与后续保存位置，不能只改未调用的函数或日志。"
+                "current_run_failed_candidates记录本任务的候选及实际拒绝或重试结果，必须根据原因修正，不能重复相同补丁；上一候选可能已回滚，old_text只匹配本轮源码。"
                 "不能虚构数据、删除实验、绕过指标核验或加入联网/系统命令。"
                 "用户要求GPU时不得改为CPU回退；环境缺少CUDA应修复环境而非改实验要求。不得改成自动联网下载来掩盖数据准备失败。"
                 "历史修复结果只是线索，必须重新核对本次异常和源码，不得照搬。证据不足则返回空 old_text。",
@@ -2666,19 +2670,39 @@ async def _agent_repair_code(
         "rationale": rationale,
         "model": proposal_model, "usage": proposal_usage, "applied": False,
     }
+    from .runtime_repair_evidence import save_candidate
+    try:
+        record['candidate_evidence']=save_candidate(workspace,job.id,dataset,attempt,{
+            'file':str(source.relative_to(workspace)),'source_sha256':hashlib.sha256(original.encode()).hexdigest(),
+            'old_text':old_text,'new_text':new_text,'rationale':rationale,'model':proposal_model,
+            'failure_type':failure_type,'original_failure_tail':failure})
+    except (ValueError,OSError) as exc:
+        record['reason']='无法保存修复候选证据，未修改源码：'+str(exc)[:200]
+        return 1,output,record
     if not old_text.strip() or len(old_text) > 2600 or len(new_text) > 5200 or original.count(old_text) != 1:
         record["reason"] = "模型未给出可唯一定位的最小修改"
+        record['retryable_proposal_failure']=bool(old_text.strip())
         return 1, output, record
     updated = original.replace(old_text, new_text, 1)
+    record['updated_sha256']=hashlib.sha256(updated.encode()).hexdigest()
+    if updated == original:
+        record.update(reason='候选没有实际源码变化，未重复运行',retryable_proposal_failure=True)
+        return 1,output,record
+    if any(row.get('file')==str(source) and not row.get('applied') and row.get('updated_sha256')==record['updated_sha256']
+           for row in (getattr(job,'result_json',None) or {}).get('repair_attempts',[])):
+        record['reason']='候选与本任务中已失败的补丁相同，未重复写入或运行'
+        return 1,output,record
     env_spec=getattr(job,'environment_spec',{}) or {}
     if (env_spec.get('gpu_requested') or (env_spec.get('hardware_plan') or {}).get('requirement')=='required'
             or _goal_requires_gpu(getattr(job,'goal',''))) and _cpu_device_assignment(updated):
         record['reason']='补丁引入或保留 CPU 设备回退，违反当前 GPU 执行要求；未修改源码'
+        record['retryable_proposal_failure']=True
         return 1,output,record
     try:
         compile(updated, str(source), "exec")
     except SyntaxError as exc:
         record["reason"] = f"补丁语法检查失败：{exc.msg}"
+        record['retryable_proposal_failure']=True
         return 1, output, record
     backup = workspace / "runs" / job.id / f"repair-{_slug(dataset)}-{attempt}-{source.name}.bak"
     _raise_if_paused(job.id)
@@ -2716,6 +2740,8 @@ async def _agent_repair_code(
     else:
         source.write_text(original, encoding="utf-8")
         record["reason"] = "补丁重试失败，已恢复原始源码"
+        record['retry_failure_tail']=retry_output[-2400:]
+        record['retryable_proposal_failure']=code != 124
     return code, retry_output, record
 
 
@@ -4465,6 +4491,7 @@ async def execute_reproduction(job_id: str) -> None:
                     output += ('\n[RuntimeOutputMissing] 作者入口退出，但未产出本次要求的全部评估指标：'
                                + ','.join(sorted(required_metrics)) + '。只可修正已有作者评估调用或真实结果记录，不得打印固定指标或改变模型和测试数据。')
                 seen_errors: set[str] = set()
+                retry_failed_candidate = False
                 def environment_or_path_failure():
                     return _diagnose_failure(output,cwd,dataset).get('type') in {
                         'dependency_platform_incompatible','network_download','model_artifact_incomplete'}
@@ -4484,8 +4511,9 @@ async def execute_reproduction(job_id: str) -> None:
                         if return_code == 124 or return_code == 0 and not output_incomplete() or not source_repair_allowed() or environment_or_path_failure():
                             break
                         signature = "\n".join(output.splitlines()[-6:])
-                        if signature in seen_errors:
+                        if signature in seen_errors and not retry_failed_candidate:
                             break
+                        retry_failed_candidate = False
                         seen_errors.add(signature)
                         await _advance(
                             session, job, "repairing", min(95, 90 + index),
@@ -4506,6 +4534,9 @@ async def execute_reproduction(job_id: str) -> None:
                         job.result_json = {**(job.result_json or {}), "repair_attempts": repairs}
                         await session.commit()
                         if not repair_record.get("applied"):
+                            if repair_record.get('retryable_proposal_failure') and repair_attempt < 2:
+                                retry_failed_candidate = True
+                                continue
                             break
                         return_code, output = repair_code, repair_output
                         if return_code == 0 and output_incomplete():
