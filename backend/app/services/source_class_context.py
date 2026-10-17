@@ -15,7 +15,7 @@ def factory_class(node):
             and isinstance(node.func.value,ast.Name) else '')
 
 
-def class_bindings(trees, entrypoints, selectors=()):
+def class_bindings(trees, entrypoints, selectors=(), resolved_factories=()):
     classes = {}
     for tree in trees.values():
         for node in ast.walk(tree):
@@ -40,12 +40,32 @@ def class_bindings(trees, entrypoints, selectors=()):
     while pending:
         name = pending.pop()
         for definition in classes.get(name, []):
-            for node in ast.walk(definition):
-                if isinstance(node, ast.Call) and call_name(node) in classes and call_name(node) not in active:
-                    active.add(call_name(node)); pending.append(call_name(node))
+            descendants = []
+            for method in definition.body:
+                options = [row['literal_options'] for row in resolved_factories
+                           if row['class'] == name and isinstance(method, ast.FunctionDef)
+                           and method.name.lstrip('_') == row['factory']]
+                # Multiple unresolved factory branches cannot prove one option.
+                values = options[0] if options and all(option == options[0] for option in options) else {}
+                class Calls(ast.NodeVisitor):
+                    def visit_If(self, node):
+                        condition = _literal(node.test, values)
+                        self.visit(node.test)
+                        children = node.body if condition is True else node.orelse if condition is False else [*node.body, *node.orelse]
+                        for child in children: self.visit(child)
+                    def visit_Call(self, node):
+                        descendants.append(node)
+                        self.generic_visit(node)
+                Calls().visit(method)
+            descendants.extend(base for base in definition.bases if isinstance(base, ast.Name))
+            for node in descendants:
+                called = node.id if isinstance(node, ast.Name) else call_name(node)
+                if called in classes and called not in active:
+                    active.add(called); pending.append(called)
     # Ambiguous roots or duplicate class names cannot justify excluding evidence.
     return {'roots': sorted(roots), 'reachable': sorted(active),
             'unambiguous': len(roots) == 1 and all(len(classes[name]) == 1 for name in active),
+            'complete_definitions': bool(roots) and all(len(classes[name]) == 1 for name in active),
             'scope': '静态构造引用闭包，不代表分支已执行或张量形状已验证'}
 
 
@@ -53,6 +73,8 @@ UNKNOWN = object()
 
 
 def _literal(node, values):
+    if isinstance(node, ast.Name):
+        return values.get(node.id, UNKNOWN)
     if isinstance(node,ast.Attribute) and isinstance(node.value,ast.Name) and node.value.id=='args':
         return values.get(node.attr,UNKNOWN)
     if isinstance(node,ast.Compare) and len(node.ops)==1:
@@ -68,9 +90,33 @@ def _literal(node, values):
     except (ValueError,TypeError):return UNKNOWN
 
 
+def cli_literal_values(tree, command):
+    from .cli_contract import argument_options, option_values
+    options = argument_options(ast.unparse(tree))
+    values = {option['dest']: option['default'] for option in options.values() if option['default'] is not None}
+    argv = command.get('argv', [])
+    for name, option in options.items():
+        supplied = option_values(argv, '--' + name)
+        if supplied:
+            try:
+                convert = {'int': int, 'float': float}.get(option['kind'], str)
+                converted = [convert(value) for value in supplied]
+                values[option['dest']] = converted if option['nargs'] in {'+', '*'} or isinstance(option['nargs'], int) else converted[0]
+            except ValueError:
+                values.pop(option['dest'], None)
+        elif '--' + name in argv:
+            values.pop(option['dest'], None)
+    # Entry code can rewrite parsed arguments. CLI defaults alone cannot then
+    # decide a branch, even if the assignment happens later or conditionally.
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == 'args' and not isinstance(node.ctx, ast.Load)):
+            values.pop(node.attr, None)
+    return values
+
+
 def factory_bindings(trees, entrypoints, commands):
     """Resolve literal CLI guards and factory defaults, without evaluating code."""
-    from .cli_contract import argument_options,option_values
     classes={}
     for filename,tree in trees.items():
         for node in ast.walk(tree):
@@ -79,14 +125,8 @@ def factory_bindings(trees, entrypoints, commands):
     for filename in entrypoints[:1]:
         tree=trees.get(filename)
         if tree is None:continue
-        options=argument_options(ast.unparse(tree))
         for command in commands[:3] or [{}]:
-            values={option['dest']:option['default'] for option in options.values() if option['default'] is not None}
-            for name,option in options.items():
-                supplied=option_values(command.get('argv',[]),'--'+name)
-                if len(supplied)==1:
-                    try:values[option['dest']]={'int':int,'float':float}.get(option['kind'],str)(supplied[0])
-                    except ValueError:values.pop(option['dest'],None)
+            values=cli_literal_values(tree,command)
             class Calls(ast.NodeVisitor):
                 def __init__(self):self.guards=[]
                 def visit_ClassDef(self,node):pass

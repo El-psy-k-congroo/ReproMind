@@ -945,7 +945,7 @@ def _workspace_context(context, job, workspace, question, terms,
         from ..services.source_calculations import calculation_packets, numbered_code, configured_model_names
         from ..services.source_class_context import class_bindings, enclosing_class, factory_bindings
         model_names = configured_model_names(job.execution_command)
-        source_trees = {}
+        source_trees, source_bodies = {}, {}
         implementation, named_implementation, structure, named_functions, optimizers, calculations = [], [], [], [], [], []
         network_methods={'forward','call'}
         if re.search(r'编码|解码|encoder|decoder|encode|decode',question,re.I):
@@ -956,6 +956,7 @@ def _workspace_context(context, job, workspace, question, terms,
             try: tree = ast.parse(body)
             except SyntaxError: continue
             source_trees[path.relative_to(sources).as_posix()] = tree
+            source_bodies[path.relative_to(sources).as_posix()] = body
             for node in ast.walk(tree):
                 if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) and len(node.name)>=4 and config_key(node.name) in config_key(question):
                     begin=node.lineno-1;end=min(len(lines),node.end_lineno,begin+30)
@@ -996,17 +997,29 @@ def _workspace_context(context, job, workspace, question, terms,
                         begin=node.lineno-1;end=min(len(lines),getattr(node,'end_lineno',node.lineno),begin+15)
                         optimizers.append({'file':path.relative_to(sources).as_posix(),'line':node.lineno,
                             'code':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(begin,end))})
-        binding = class_bindings(source_trees, question_entries[:1], model_names)
-        task_evidence['selected_class_binding_not_execution_proof'] = binding
-        task_evidence['selected_factory_calls_not_execution_proof'] = factory_bindings(
+        factory_calls = factory_bindings(
             source_trees,question_entries[:1],(job.execution_command or {}).get('commands') or [])
-        if binding['unambiguous']:
+        binding = class_bindings(source_trees, question_entries[:1], model_names, factory_calls)
+        task_evidence['selected_class_binding_not_execution_proof'] = binding
+        task_evidence['selected_factory_calls_not_execution_proof'] = factory_calls
+        from ..services.source_call_context import selected_call_packets, current_path_only, inactive_excerpt
+        call_packets, inactive_lines = selected_call_packets(source_trees, source_bodies, question_entries[:1],
+            (job.execution_command or {}).get('commands') or [])
+        task_evidence['selected_entry_calls_not_execution_proof'] = call_packets
+        if current_path_only(question):
+            implementation = [row for row in implementation if not inactive_excerpt(row,inactive_lines)]
+            calculations = [row for row in calculations if not inactive_excerpt(row,inactive_lines)]
+            optimizers = [row for row in optimizers if not inactive_excerpt(row,inactive_lines)]
+            context['source_relevant_excerpts'] = [row for row in context.get('source_relevant_excerpts',[]) if not inactive_excerpt(row,inactive_lines)]
+        if binding['unambiguous'] or binding['complete_definitions'] and current_path_only(question):
             active_classes = set(binding['reachable'])
             named_implementation = [row for row in named_implementation if row['symbol'].split('.')[0] in active_classes]
             structure = [row for row in structure if row['class'] in active_classes]
             for row in named_implementation:
                 row['construction_sites_from_static_ast'] = [site for site in row['construction_sites_from_static_ast']
                     if not site['enclosing_class'] or site['enclosing_class'] in active_classes]
+        for row in [*implementation,*optimizers]:
+            row['scope'] = '仅仓库定义片段，未证明本次调用；需结合所选入口和条件分支，不可单独当成实际损失/优化器'
         task_evidence['loss_assignments'] = implementation[:5]
         named_implementation.sort(key=lambda row:(
             -sum(name in config_key(row['file']+' '+row['symbol']) for name in model_names),
@@ -1037,6 +1050,10 @@ def _workspace_context(context, job, workspace, question, terms,
                 if not re.search(r'loss|criterion',name,re.I):continue
                 if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
                     continue  # Full definitions outrank repeated call sites.
+                if (task_evidence.get('selected_class_binding_not_execution_proof',{}).get('complete_definitions')
+                        and current_path_only(question) and enclosing_class(tree,node.lineno)
+                        and enclosing_class(tree,node.lineno) not in binding['reachable']):
+                    continue
                 start=max(0,node.lineno-3);end=min(len(lines),getattr(node,'end_lineno',node.lineno)+2,start+45)
                 loss_definitions.append({'file':path.relative_to(sources).as_posix(),'line':node.lineno,
                                          'excerpt':'\n'.join(f'L{i+1}: {lines[i]}' for i in range(start,end))})
@@ -1759,6 +1776,10 @@ async def stream_answer(
                 "方法解释优先按源码的赋值顺序逐步说明，不自行合并成总公式；系数必须和其所乘表达式一一对应。"
                 "constructor_signature_from_static_ast记录默认开关，construction_sites_from_static_ast记录静态传参；"
                 "selected_factory_calls_not_execution_proof还核对本次CLI条件和工厂默认值；默认关闭的可选分支不能用来解释本次所选分类头或损失。"
+                "selected_entry_calls_not_execution_proof提供当前入口调用、CLI分支、继承方法的定义及默认参数，优先据此解释实际选中路径。"
+                "literal_parameters是静态绑定的默认/覆盖，不是运行实测值；unknown_parameters必须保留未知，不得沿用被覆盖默认值。"
+                "只能展开当前选中的训练调用，不能先把未启用分支写成流程再补一句本次不执行。"
+                "看到分类器fit接口不能推断闭式求解或具体优化算法；需核对实际类型、solver及其实现证据。"
                 "必须结合两者及本次命令核对可选分支。条件成立才执行的操作不得写成必然执行，也不能把内部残差移到外部激活之后。"
                 "原文公式无法可靠对应时，给出当前源码中的逐行计算步骤并解释变量，不编造等价公式。"
                 "若未读取具体损失实现，不提供推测的具体损失公式；只说明已核验的接口与尚缺证据，不能以通用公式代替当前实现。"
