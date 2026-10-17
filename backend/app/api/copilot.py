@@ -175,7 +175,7 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
             ['dataset', 'trial', 'parameter', 'value', 'parameters', 'validation_score', 'validation_accuracy',
              'test_accuracy', 'test_metrics', 'selected', 'return_code']),
         'tuning_policy': job.get('tuning_policy'),
-        'tuning_plans_not_executed': rows(plans, ['dataset', 'space', 'trials', 'max_trials', 'max_seconds', 'selection_rule', 'declared_parameters', 'parameters_without_search_domain']),
+        'tuning_plans_not_executed': rows(plans, ['dataset', 'space', 'trials', 'max_trials', 'max_seconds', 'selection_rule', 'declared_parameters', 'parameters_without_search_domain', 'inactive_cli_parameters', 'fixed_protocol_parameters']),
         'tuning_plan_rows_complete': len(plans) <= 12,
         'current_local_dataset_evidence': {name: {key: value for key, value in row.items()
             if key in {'ready', 'path', 'dataset_variant', 'file_count', 'missing_loader_files'}}
@@ -1446,7 +1446,9 @@ def _tuning_plan_answer(context: dict, question: str) -> str:
     if history:
         lines.append(f"已有 {job.get('tuning_attempts_count', len(history))} 次历史参数尝试，原始记录保留；新建议不代表这些参数已经试过。")
     if not plans or not any(plan.get('trials') for plan in plans):
-        return '\n\n'.join(lines + ['当前没有可执行的搜索方案：未发现受支持的数值 CLI 开关，或源码无法完整校验。不能凭参数名称猜测支持。'])
+        inactive = sorted({row['parameter'] for plan in plans for row in plan.get('inactive_cli_parameters', [])})
+        return '\n\n'.join(lines + ['当前没有可执行的搜索方案：未发现当前分支可调的数值 CLI 开关，或源码无法完整校验。不能凭参数名称猜测支持。']
+                           + (['本次已确定不启用分支中的参数：' + '、'.join(inactive) + '；不参与搜索。'] if inactive else []))
     grouped = {}
     for plan in plans:
         signature = json.dumps(plan['space'], sort_keys=True)
@@ -1462,6 +1464,10 @@ def _tuning_plan_answer(context: dict, question: str) -> str:
             lines.append('\n固定的实验协议（不参与选优）：' + '、'.join(
                 f"`{item['parameter']}`={number(item['baseline'])}" for item in plan['fixed_protocol_parameters'])
                 + '。随机种子与每类样本规模不按验证集分数选择。')
+        if plan.get('inactive_cli_parameters'):
+            lines.append('\n已排除本次未启用分支中的 CLI 参数：' + '、'.join(
+                f"`{item['parameter']}`" for item in plan['inactive_cli_parameters'])
+                + '。存在声明不代表本次训练会使用该参数；未对这些维度花费搜索预算。')
         lines.append(f"\n每个数据集最多 {len(plan['trials'])} 次单参数／联合尝试，累计额外预算 {plan['max_seconds'] // 60} 分钟。")
     lines.append('\n范围是围绕当前配置的局部建议，不是论文指定的搜索范围，也不保证最优。只用验证集选参；缺少验证指标或试验失败就停止额外搜索。基线单独保留，测试指标不触发搜索、不用于选参。需要在实验确认区单独批准后才运行。')
     return '\n'.join(lines)

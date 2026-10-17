@@ -133,6 +133,8 @@ def build_tuning_plans(job, budget=6):
         if entry is None or entry.stat().st_size > 250_000:
             continue
         declarations, domains = {}, {}
+        from .cli_parameter_activity import parameter_activity
+        activity = parameter_activity(entry.read_text(encoding='utf-8', errors='replace'), command.get('argv', []))
         for path in entry_sources(source, [entry.relative_to(source).as_posix()]):
             body = path.read_text(encoding='utf-8', errors='replace')
             declarations.update(dataclass_defaults(body))
@@ -157,6 +159,8 @@ def build_tuning_plans(job, budget=6):
                 names = ['config:' + key for key in config_defaults if key.split('.')[-1] in aliases]
             grouped_parameters.extend((group, name) for name in names)
         for group, name in grouped_parameters:
+            if activity.get(name, {}).get('inactive'):
+                continue
             try:
                 value = config_defaults[name[7:]] if name.startswith('config:') else _current_value(command.get('argv', []), name, declarations[name])
                 domain = domains.get(name) or domains.get(name.removeprefix('config:').split('.')[-1])
@@ -175,6 +179,8 @@ def build_tuning_plans(job, budget=6):
         represented = {row['parameter'] for row in space}
         for name, domain in domains.items():
             if protocol_parameter(name):continue
+            if activity.get(name, {}).get('inactive'):
+                continue
             if name in represented: continue
             if name.startswith('config:'):
                 if name[7:] not in config_defaults: continue
@@ -214,6 +220,10 @@ def build_tuning_plans(job, budget=6):
                       'declared_parameters': {name:_current_value(command.get('argv',[]),name,value) for name,value in declarations.items()},
                       'parameters_without_search_domain': [name for name in declarations if name not in {item['parameter'] for item in space}],
                       'fixed_protocol_parameters':fixed_protocol,
+                      'inactive_cli_parameters': [
+                          {'parameter':name, 'source':entry.relative_to(source).as_posix(),
+                           'uses':row['uses'], 'reason':'所有直接读取均在本次CLI已确定不启用的分支；不作为搜索维度'}
+                          for name,row in activity.items() if row['inactive']],
                       'config_binding': {key:value for key,value in binding.items() if key!='data'} if binding else None,
                       'space': space, 'baseline_parameters': baseline, 'trials': unique[:budget] if fingerprint else [],
                       'parameters_not_covered_by_budget': uncovered,
