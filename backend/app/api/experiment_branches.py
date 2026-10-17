@@ -725,6 +725,24 @@ async def apply_revision(project_id: str, job_id: str, payload: BranchConfirmReq
             "message": "代码已修改并备份原文件。未启动实验；你可以稍后明确批准运行。"}
 
 
+def _included_in_initial_approval(base, proposal: dict) -> bool:
+    """A pre-approval edit is part of the initial run, not an unrun revision."""
+    approved_at = getattr(base, 'approved_at', None)
+    if not approved_at or not proposal.get('applied_at'):
+        return False
+    try:
+        approved = datetime.fromisoformat(str(approved_at))
+        applied = datetime.fromisoformat(str(proposal['applied_at']))
+        if approved.tzinfo is None:
+            approved = approved.replace(tzinfo=timezone.utc)
+        if applied.tzinfo is None:
+            applied = applied.replace(tzinfo=timezone.utc)
+        return applied <= approved
+    except (TypeError, ValueError):
+        # Uncertain legacy timestamps must not silently hide an unrun edit.
+        return False
+
+
 @router.get("/{job_id}/pending-revision")
 async def pending_revision(project_id: str, job_id: str,
                            db: AsyncSession = Depends(get_db)) -> dict | None:
@@ -735,7 +753,8 @@ async def pending_revision(project_id: str, job_id: str,
         return None
     for path in sorted(directory.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:30]:
         proposal = json.loads(path.read_text(encoding="utf-8"))
-        if proposal.get("applied_at") and not proposal.get("run_id"):
+        if (proposal.get("applied_at") and not proposal.get("run_id")
+                and not _included_in_initial_approval(base, proposal)):
             target = requested_framework(str(proposal.get('instruction') or ''))
             valid = not target or source_framework(source_bodies(source)) == target
             return {"proposal_id": path.stem, "files": proposal.get("files", []),
