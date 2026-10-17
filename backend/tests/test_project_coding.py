@@ -120,6 +120,24 @@ def test_additional_read_and_syntax_repair_are_bounded(tmp_path, monkeypatch):
     assert (tmp_path / 'b.py').read_text() == 'n = 2\n'
 
 
+def test_repeated_oversized_plan_reads_complete_files_in_batches(tmp_path,monkeypatch):
+    (tmp_path/'a.py').write_text('n=1\n#'+'a'*40+'\n')
+    (tmp_path/'b.py').write_text('m=1\n#'+'b'*40+'\n')
+    (tmp_path/'c.py').write_text('unused=1\n#'+'c'*40+'\n')
+    selected={'read_files':['a.py','b.py','c.py']}
+    router=Router([selected,selected,{'read_files':['b.py'],'changes':[]},
+        {'changes':[{'file':'a.py','old_text':'n=1','new_text':'n=2'},
+                    {'file':'b.py','old_text':'m=1','new_text':'m=2'}]}])
+    monkeypatch.setattr(coding,'MAX_CONTEXT',120)
+    monkeypatch.setattr(coding,'get_model_router',lambda:router)
+    original,revised,*rest=asyncio.run(coding.propose_revision(tmp_path,'协调 a 和 b 的数值'))
+    assert set(router.calls[2][1]['files'])=={'a.py'}
+    assert set(router.calls[2][1]['deferred_read_files'])=={'b.py','c.py'}
+    assert set(router.calls[3][1]['files'])=={'a.py','b.py'}
+    assert set(revised)=={'a.py','b.py'}
+    assert all((tmp_path/name).read_text()==body for name,body in original.items())
+
+
 @pytest.mark.parametrize('selected', [['../outside.py'], ['missing.py'], []])
 def test_bad_planner_paths_do_not_write(tmp_path, monkeypatch, selected):
     (tmp_path / 'a.py').write_text('n = 1\n')
