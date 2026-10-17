@@ -2284,6 +2284,9 @@ async def prepare_reproduction(job_id: str) -> None:
                 run_workspace,
             )
             if job.execution_command.get("blocked_reason"):
+                # The error handler opens another session. Preserve the exact
+                # rejected plan before this session rolls back on the error.
+                await session.commit()
                 raise ValueError(str(job.execution_command["blocked_reason"]))
 
             installed = await _install_uploaded_datasets(session, job)

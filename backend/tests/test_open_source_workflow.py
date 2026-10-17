@@ -159,6 +159,26 @@ def test_author_source_is_available_before_simple_metadata_extraction(tmp_path, 
     assert job.code_spec['model_usage']['total_tokens'] == 5
 
 
+def test_rejected_author_plan_survives_transaction_rollback(tmp_path,monkeypatch):
+    import copy
+    job,source=setup_workflow(tmp_path,monkeypatch,spec={'datasets':['Alpha'],'metrics':['Accuracy']})
+    job.goal='Alpha 完整训练，seed=42'
+    session_class=engine.AsyncSessionLocal
+    saved={}
+    class Session(session_class):
+        async def commit(self):
+            saved['command']=copy.deepcopy(job.execution_command)
+        async def __aexit__(self,kind,*args):
+            if kind:
+                job.execution_command=copy.deepcopy(saved.get('command',{}))
+    monkeypatch.setattr(engine,'AsyncSessionLocal',Session)
+    asyncio.run(engine.prepare_reproduction(job.id))
+    assert job.status==ReproductionStatus.failed
+    assert job.execution_command['commands'][0]['dataset']=='Alpha'
+    assert job.execution_command['unresolved_goal_parameters'][0]['requested']==42
+    assert '种子' in job.execution_command['blocked_reason']
+
+
 @pytest.mark.parametrize('cause', ['ReadTimeout', 'Missing dataset names'])
 def test_metadata_failure_preserves_readable_author_source_not_fake_implementation(tmp_path, monkeypatch, cause):
     job, source = setup_workflow(tmp_path, monkeypatch)
