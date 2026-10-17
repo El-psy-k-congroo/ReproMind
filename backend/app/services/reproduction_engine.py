@@ -1482,11 +1482,16 @@ def _execution_command(
                        if mode=='full' and entrypoints else [])
     blocked_reason = ("训练命令缺少作者声明的必需参数："+'、'.join(missing_options)+"；请补全作者配置后再运行"
                       if missing_options else "" if entrypoints or mode == "smoke" else "未识别到可执行训练入口，不能声称已复现")
-    from .command_intent import apply_goal_parameters
+    from .command_intent import apply_goal_parameters, unbound_goal_parameters
+    unresolved = []
     if mode == 'full' and entrypoints and paper_spec.get('user_goal'):
         for item in commands:
             item['argv'], item['user_parameter_overrides'] = apply_goal_parameters(
                 source, entrypoints[:1], item['argv'], paper_spec['user_goal'])
+            unresolved.extend({'dataset':item.get('dataset'),**row} for row in unbound_goal_parameters(
+                paper_spec['user_goal'],item['user_parameter_overrides']))
+    if unresolved:
+        blocked_reason = '；'.join(filter(None,[blocked_reason,'；'.join(row['reason'] for row in unresolved)]))
     recommended = commands[0]["argv"]
     planned = {str(item.get("dataset", "")).lower() for item in commands}
     unplanned = [str(label) for label in paper_spec.get("datasets", [])
@@ -1508,6 +1513,7 @@ def _execution_command(
         "runtime_environment":runtime_environment,
         "adaptations": adaptations,
         "unplanned_datasets": unplanned,
+        'unresolved_goal_parameters':unresolved,
         "blocked_reason": blocked_reason,
     }
 

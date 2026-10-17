@@ -610,6 +610,8 @@ async def approve_reproduction(
         raise HTTPException(status_code=404, detail="复现任务不存在")
     if job.status != ReproductionStatus.awaiting_approval:
         raise HTTPException(status_code=409, detail="当前任务不处于待批准状态")
+    if (job.execution_command or {}).get('blocked_reason'):
+        raise HTTPException(status_code=409, detail=job.execution_command['blocked_reason'])
     budget = payload.tuning_budget if payload else 0
     plans = await asyncio.to_thread(build_tuning_plans, job, budget) if budget else []
     job.result_json = {**(job.result_json or {}), "tuning_policy": {

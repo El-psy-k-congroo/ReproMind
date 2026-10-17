@@ -700,6 +700,11 @@ async def apply_revision(project_id: str, job_id: str, payload: BranchConfirmReq
                 'proposal_id':payload.proposal_id, 'sha256':{
                     **((base.environment_spec or {}).get('dependency_revision') or {}).get('sha256', {}),
                     **dependency_hashes}}}
+        if (base.status == ReproductionStatus.awaiting_approval and not getattr(base,'approved_at',None)
+                and (getattr(base,'execution_command',None) or {}).get('entrypoint_candidates')):
+            datasets = [str(item.get('dataset')) for item in (base.execution_command or {}).get('commands', []) if item.get('dataset')]
+            base.execution_command = _fresh_run_command(base, source, workspace/'runs'/base.id,
+                base.environment_spec or {}, datasets, changed_cli_parameters(proposal))
         proposal["applied_at"] = datetime.now(timezone.utc).isoformat()
         proposal_file.write_text(json.dumps(proposal, ensure_ascii=False), encoding="utf-8")
         base.events = [*(base.events or []), {"stage": "code_revision", "progress": base.progress,

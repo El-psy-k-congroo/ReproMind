@@ -17,7 +17,13 @@ from app.models import ReproductionStatus
 @pytest.mark.parametrize('state',[ReproductionStatus.awaiting_approval,ReproductionStatus.needs_input])
 def test_idle_author_source_can_be_revised_before_first_run(tmp_path,monkeypatch,state):
     original='epochs = 200\n';(tmp_path/'train.py').write_text(original)
-    base=SimpleNamespace(id='base',status=state,events=[],progress=82,result_json={})
+    base=SimpleNamespace(id='base',status=state,events=[],progress=82,result_json={},approved_at=None,
+        execution_command={'entrypoint_candidates':['train.py'],'commands':[{'dataset':'Example'}]},environment_spec={})
+    refreshed=[]
+    def fresh(*args):
+        assert (tmp_path/'train.py').read_text()=='epochs = 2\n'
+        refreshed.append(True)
+        return {'commands':[{'dataset':'Example'}],'blocked_reason':''}
     proposal={'base_run_id':'base','files':['train.py'],'source_sha256':{'train.py':hashlib.sha256(original.encode()).hexdigest()},
               'changes':[{'file':'train.py','old_text':'epochs = 200','new_text':'epochs = 2'}],'instruction':'本次仅训练两轮'}
     proposal_file=tmp_path/'proposal.json';proposal_file.write_text('{}')
@@ -29,9 +35,11 @@ def test_idle_author_source_can_be_revised_before_first_run(tmp_path,monkeypatch
     monkeypatch.setattr(branches,'_job',job)
     monkeypatch.setattr(branches,'_scope',lambda *_:(tmp_path,tmp_path))
     monkeypatch.setattr(branches,'_proposal',lambda *_:(proposal_file,proposal))
+    monkeypatch.setattr(branches,'_fresh_run_command',fresh)
     result=asyncio.run(branches.apply_revision('p','base',branches.BranchConfirmRequest(proposal_id='proposal'),DB()))
     assert result['status']=='applied_not_run' and (tmp_path/'train.py').read_text()=='epochs = 2\n'
     assert (tmp_path/'runs/base/revisions/proposal/original/train.py').read_text()==original
+    assert bool(refreshed)==(state==ReproductionStatus.awaiting_approval)
 
 
 def fixture_proposal(tmp_path):

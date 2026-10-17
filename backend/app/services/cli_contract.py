@@ -16,6 +16,46 @@ def option_values(argv, option):
     return []
 
 
+def argument_options(body):
+    """Literal argparse metadata only; no author imports or expression evaluation."""
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return {}
+    found = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute) or node.func.attr != 'add_argument':
+            continue
+        flags = [arg.value for arg in node.args if isinstance(arg,ast.Constant)
+                 and isinstance(arg.value,str) and arg.value.startswith('--')]
+        if not flags:
+            continue
+        name = flags[0][2:]
+        values = {item.arg:item.value for item in node.keywords}
+        def literal(key, fallback=None):
+            try:return ast.literal_eval(values[key])
+            except (KeyError,ValueError,TypeError):return fallback
+        kind = values.get('type')
+        kind = kind.id if isinstance(kind,ast.Name) else ''
+        default = literal('default')
+        if not kind and type(default) in {str,int,float}:
+            kind = type(default).__name__
+        found[name] = {'kind':kind,'nargs':literal('nargs'),'dest':literal('dest',name.replace('-','_')),
+                       'default':default,'choices':literal('choices')}
+    return found
+
+
+def replace_option_values(argv, option, values):
+    argv = list(argv)
+    for index, token in enumerate(argv):
+        if token == option:
+            end = index + 1 + len(option_values(argv,option))
+            return [*argv[:index],option,*values,*argv[end:]]
+        if str(token).startswith(option+'='):
+            return [*argv[:index],option,*values,*argv[index+1:]]
+    return [*argv,option,*values]
+
+
 def missing_required_options(body, argv):
     try:
         tree=ast.parse(body)

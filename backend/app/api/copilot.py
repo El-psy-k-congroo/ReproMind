@@ -1278,6 +1278,8 @@ async def _rerun_action_plan(db: AsyncSession, project: Project, run_id: str, qu
             "datasets": datasets, "gpu_requested": gpu, "status": job.status.value}
     if job.status.value in {"queued", "running", "executing"} or (job.result_json or {}).get('tuning_active') or (job.result_json or {}).get('ablation_active'):
         plan["reason"] = "当前项目有活动实验，须先暂停并等待退出或等实验结束"
+    elif (job.execution_command or {}).get('blocked_reason'):
+        plan['reason'] = job.execution_command['blocked_reason']
     elif job.status.value == 'awaiting_approval':
         # Initial approval owns environment creation and preparation. A rerun
         # probe would incorrectly demand an already installed environment here.
