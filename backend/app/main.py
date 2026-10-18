@@ -1,13 +1,16 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from .api import analytics, copilot, experiment_branches, models_catalog, model_routing, projects, reproductions
 from .config import get_settings
 from .database import close_database, init_database
+from .deployment import enforce_deployment_capabilities
 
 
 @asynccontextmanager
@@ -37,7 +40,7 @@ app = FastAPI(
     version="0.1.0",
     description="Paper reproduction, project code collaboration and experiment execution API",
     lifespan=lifespan,
-    dependencies=[Depends(validate_resource_ids)],
+    dependencies=[Depends(validate_resource_ids), Depends(enforce_deployment_capabilities)],
 )
 app.add_middleware(
     CORSMiddleware,
@@ -62,6 +65,20 @@ def health() -> dict:
         "service": settings.app_name,
         "llm_enabled": settings.llm_enabled,
         "model_provider": settings.model_provider,
+        "deployment_mode": settings.deployment_mode,
+    }
+
+
+@app.get("/api/deployment")
+def deployment_info() -> dict:
+    demo = settings.deployment_mode == "demo"
+    return {
+        "mode": settings.deployment_mode,
+        "execution_enabled": not demo,
+        "shared_workspace": demo,
+        "repository_url": "https://github.com/El-psy-k-congroo/ReproMind",
+        "notice": ("云端评审工作区 · 2核 / 2GB / 无GPU。可创建项目、上传材料和使用复现助手；"
+                   "仓库下载、环境安装、代码修改与实验执行请使用本地部署。此为共享工作区，请勿上传私密材料。") if demo else "",
     }
 
 
@@ -84,3 +101,26 @@ def agent_topology() -> dict:
         },
         "context": "Project source snapshots, approved commands and reproduction records",
     }
+
+
+# Serve a built frontend on the same origin on both Windows and Linux.
+_frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+@app.get("/{frontend_path:path}", include_in_schema=False)
+def frontend_page(frontend_path: str):
+    if any(part.startswith('.') for part in Path(frontend_path).parts):
+        raise HTTPException(status_code=404)
+    if frontend_path == "api" or frontend_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="接口不存在")
+    target = (_frontend_dist / frontend_path).resolve()
+    if not target.is_relative_to(_frontend_dist.resolve()):
+        raise HTTPException(status_code=404)
+    if target.is_file():
+        return FileResponse(target)
+    if frontend_path.startswith('assets/') or Path(frontend_path).suffix:
+        raise HTTPException(status_code=404)
+    index = _frontend_dist / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=503, detail="前端尚未构建，请先在 frontend 目录执行 npm ci 和 npm run build。")
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})

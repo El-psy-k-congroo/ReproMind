@@ -12,6 +12,7 @@ const route = useRoute()
 const router = useRouter()
 const project = ref<Project | null>(null)
 const loading = ref(true)
+const demoMode = ref(false)
 const uploading = ref(false)
 const error = ref('')
 const showUpload = ref(false)
@@ -261,6 +262,7 @@ function formatBytes(value: number) {
 }
 
 onMounted(async () => {
+  void api.deployment().then(info => { demoMode.value = info.mode === 'demo' }).catch(() => {})
   const initialModel = selectedModel.value
   void (async () => { try {
     modelCatalog.value = await api.listModels()
@@ -306,7 +308,7 @@ onUnmounted(stopReproductionPolling)
         <button v-if="reproduction && (['queued', 'running', 'executing'].includes(reproduction.status) || (!!reproduction.result_json.ablation_active || !!reproduction.result_json.tuning_active) && reproduction.status === 'completed')" class="button secondary" @click="pauseReproduction">暂停任务</button>
         <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">恢复任务</button>
         <button class="button ghost danger-text" :disabled="deletingProject" @click="deleteCurrentProject">{{ deletingProject ? '正在删除项目与环境…' : '删除项目' }}</button>
-        <button class="button primary" :disabled="startingReproduction || !project.artifacts.some(item => item.kind === 'paper') || runHistory.some(item => ['queued', 'running', 'executing'].includes(item.status))" @click="startReproduction">
+        <button class="button primary" :title="demoMode ? '请在本地部署后运行完整复现流程' : ''" :disabled="demoMode || startingReproduction || !project.artifacts.some(item => item.kind === 'paper') || runHistory.some(item => ['queued', 'running', 'executing'].includes(item.status))" @click="startReproduction">
           <span v-if="startingReproduction" class="loader small"></span>{{ startingReproduction ? '正在创建…' : '启动自主复现' }}
         </button>
       </div>

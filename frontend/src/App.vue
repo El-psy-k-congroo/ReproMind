@@ -9,6 +9,10 @@ const router = useRouter()
 const projects = ref<ProjectListItem[]>([])
 const openProjectMenu = ref('')
 const sidebarError = ref('')
+const deployment = ref<{ mode: string; notice: string } | null>(null)
+onMounted(async () => {
+  try { deployment.value = await api.deployment() } catch { /* Existing local backends remain usable. */ }
+})
 async function refreshProjects() {
   try { projects.value = await api.listProjects() } catch { /* Preserve the last successful project list. */ }
 }
@@ -78,10 +82,14 @@ const projectTarget = (section: string) => {
 
       <div class="sidebar-foot">
         <div class="avatar">PJ</div>
-        <div><strong>研究工作区</strong><small>本地开发环境</small></div>
+        <div><strong>研究工作区</strong><small>{{ deployment?.mode === 'demo' ? '云端评审环境' : '本地部署环境' }}</small></div>
       </div>
     </aside>
     <main class="main-content">
+      <div v-if="deployment?.mode === 'demo'" class="deployment-notice" role="note">
+        <p>{{ deployment.notice }}</p>
+        <a href="https://github.com/El-psy-k-congroo/ReproMind#快速启动" target="_blank" rel="noopener">本地部署完整版本 ↗</a>
+      </div>
       <RouterView />
     </main>
   </div>

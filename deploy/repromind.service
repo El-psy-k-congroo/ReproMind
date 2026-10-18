@@ -1,0 +1,28 @@
+[Unit]
+Description=ReproMind review application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=repromind
+Group=repromind
+WorkingDirectory=/opt/repromind/backend
+EnvironmentFile=/etc/repromind/repromind.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/repromind-api-venv/bin/python run_server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/repromind
+MemoryMax=1100M
+CPUQuota=150%
+TasksMax=80
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

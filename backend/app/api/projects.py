@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import get_settings
 from ..database import get_db
+from ..deployment import check_demo_capacity
 from ..models import Artifact, ArtifactKind, Project, ReproductionJob, ReproductionStatus
 from ..schemas import ArtifactRead, ProjectCreate, ProjectListItem, ProjectRead
 from ..services.file_parser import parse_bytes
@@ -78,6 +79,7 @@ async def list_projects(db: AsyncSession = Depends(get_db)) -> list[ProjectListI
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_db)) -> Project:
+    await check_demo_capacity(db, new_project=True)
     project = Project(tenant_id=get_settings().default_tenant_id, **payload.model_dump())
     db.add(project)
     await db.flush()
@@ -197,6 +199,7 @@ async def upload_artifact(
         raise HTTPException(status_code=413, detail=f"文件不能超过 {settings.max_upload_mb} MB")
     if not data:
         raise HTTPException(status_code=400, detail="文件为空")
+    await check_demo_capacity(db, upload_bytes=len(data))
 
     safe_name = (file.filename if file.filename is not None else "artifact.bin").replace("\\", "/").rsplit("/", 1)[-1]
     if (not safe_name or safe_name in {".", ".."} or safe_name.endswith((".", " "))

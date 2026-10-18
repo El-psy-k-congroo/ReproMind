@@ -41,6 +41,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  deployment: () => request<{ mode: string; notice: string }>('/deployment'),
   listProjects: () => request<ProjectListItem[]>('/projects'),
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   deleteProject: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),

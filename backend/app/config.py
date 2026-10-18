@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,8 +9,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "ReproMind API"
     app_env: str = "development"
-    app_host: str = "0.0.0.0"
-    app_port: int = 8000
+    app_host: str = "127.0.0.1"
+    app_port: int = 8010
+    deployment_mode: Literal["local", "demo"] = "local"
+    demo_max_projects: int = Field(default=12, ge=1, le=100)
+    demo_max_storage_mb: int = Field(default=256, ge=1, le=2048)
     default_tenant_id: str = "tenant_default"
 
     # 与 EduAgent 一致：支持拆分的 PostgreSQL 配置，也允许 DATABASE_URL 覆盖。

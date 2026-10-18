@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew ReproMind TLS certificate
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/certbot/bin/certbot renew --quiet --no-random-sleep-on-renew --deploy-hook "systemctl reload nginx"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check short-lived TLS certificates twice daily
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
