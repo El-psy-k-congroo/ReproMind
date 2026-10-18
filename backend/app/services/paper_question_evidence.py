@@ -15,10 +15,13 @@ TOPICS = [
 ]
 
 
-def paper_question_passages(text, question, filename='', limit=5):
+def paper_question_passages(text, question, filename='', limit=5, method_name=''):
     lines = text.splitlines()
     normalized = [unicodedata.normalize('NFKC', line).casefold() for line in lines]
     query = unicodedata.normalize('NFKC', question).casefold()
+    anchor = re.sub(r'[^a-z0-9]', '', unicodedata.normalize('NFKC',method_name).casefold())
+    anchor = anchor if 3 <= len(anchor) <= 80 else ''
+    comparing = bool(re.search(r'对比|对照|比较|baseline|compar',query))
     groups = [words for triggers, words in TOPICS if any(term in query for term in triggers)]
     terms = list(dict.fromkeys(re.findall(r'[a-z][a-z0-9_-]{2,}', query)))[:20]
     if not groups and not terms:
@@ -26,17 +29,20 @@ def paper_question_passages(text, question, filename='', limit=5):
     # Bibliography mentions do not establish the current method; appendices
     # after a bibliography remain eligible for implementation details.
     excluded, in_references = set(), False
-    sections, section = [], ''
+    sections, section, heading_lines, heading_line = [], '', [], None
     for i, line in enumerate(normalized):
         if re.fullmatch(r'\s*(?:\d+\s+)?(?:references|bibliography)\s*', line):
             in_references = True
         if re.match(r'^\s*(?:[a-z](?:\.\d+)*\.?\s+)?appendi(?:x|ces)\b', line):
             in_references = False
+            section, heading_line = line, i + 1
         if in_references:
             excluded.add(i)
         if re.match(r'^\s*(?:\d+(?:\.\d+)*|[a-z](?:\.\d+)+)\s+[a-z]', line):
             section = line
+            heading_line = i + 1
         sections.append(section)
+        heading_lines.append(heading_line)
     candidates = []
     for index in range(len(lines)):
         if index in excluded:
@@ -44,7 +50,11 @@ def paper_question_passages(text, question, filename='', limit=5):
         if not any(word in normalized[index] for words in groups for word in words) and not any(
                 term in normalized[index] for term in terms):
             continue
-        start, end = max(0, index - 3), min(len(lines), index + 7)
+        baseline = bool(re.search(r'baseline|related work',sections[index]))
+        start, end = max(0, index - (12 if baseline and comparing else 6)), min(len(lines), index + 7)
+        if heading_lines[index]:
+            start = max(start, heading_lines[index]-1)
+        end = next((i for i in range(index+1,end) if heading_lines[i] != heading_lines[index]),end)
         while start < index and start in excluded:
             start += 1
         end = next((i for i in range(index, end) if i in excluded), end)
@@ -56,16 +66,29 @@ def paper_question_passages(text, question, filename='', limit=5):
         hits = {i for i, score in enumerate(scores) if score}
         direct = sum(term in vicinity for term in terms)
         preferred = int(bool(re.search(r'method|approach|framework|implementation|training|setting', sections[index])))
-        candidates.append((start, end, hits, direct, excerpt, scores, preferred))
+        named = bool(anchor and anchor in re.sub(r'[^a-z0-9]', '',vicinity))
+        relevance = preferred * 2 + int(named) * 2 - (5 if anchor and baseline and not comparing else 0)
+        candidates.append((start, end, hits, direct, excerpt, scores, relevance, heading_lines[index], baseline))
     selected, topic = [], 0
+    def take(best):
+        nonlocal candidates
+        start, end, hits, direct, excerpt, scores, preferred, heading, baseline = best
+        selected.append({'source': filename, 'line_start': start + 1, 'line_end': end, 'text': excerpt,
+                         'section_heading':lines[heading-1] if heading else '', 'section_line':heading,
+                         'requested_method_hint_not_attribution_proof':method_name})
+        candidates = [row for row in candidates if row[1] <= start or row[0] >= end]
+    parameter_topic = next((i for i, words in enumerate(groups) if 'learning rate' in words),None)
+    if comparing and re.search(r'baseline|基线',query) and parameter_topic is not None:
+        for baseline in (False,True):
+            pool = [row for row in candidates if row[8] is baseline and row[5][parameter_topic]]
+            if pool and len(selected) < limit:
+                take(max(pool,key=lambda row:(row[5][parameter_topic] + row[6],row[3],-row[0])))
     while candidates and len(selected) < limit:
         eligible = [row for row in candidates if topic < len(groups) and row[5][topic]]
         best = max(eligible or candidates, key=lambda row: (
-            row[5][topic] + row[6] * 2 if eligible else len(row[2]) + row[3], row[3], -row[0]))
-        start, end, hits, direct, excerpt, scores, preferred = best
-        selected.append({'source': filename, 'line_start': start + 1, 'line_end': end, 'text': excerpt})
+            row[5][topic] + row[6] if eligible else len(row[2]) + row[3] + row[6], row[3], -row[0]))
+        take(best)
         topic += 1
-        candidates = [row for row in candidates if row[1] <= start or row[0] >= end]
     return selected
 
 

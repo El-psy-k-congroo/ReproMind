@@ -10,6 +10,14 @@ from .run_parameters import effective_numeric_parameters
 
 
 def performance_question(question):
+    # A request to inspect the current data/code is an evidence audit, even if
+    # poor accuracy motivates it. The hypotheses-only comparison route would
+    # otherwise discard the requested label counts and actual parameter facts.
+    audit = (re.search(r'检查|核对|读取|审查|\binspect\b|\baudit\b',question,re.I)
+             and re.search(r'标签|抽样|采样|权重来源|实际训练参数|调用路径|数据划分|label|sampling|weight source',question,re.I))
+    cross_run = re.search(r'上次|之前|两次|两轮|几个实验|历史|比较.*实验|对比.*实验|previous|across.run|compare.*runs?',question,re.I)
+    if audit and not cross_run:
+        return False
     # Merely naming an evaluation metric is not a request for causal diagnosis.
     metric = r'性能|准确率|精度|效果|分数|得分|速度|耗时|吞吐|延迟|显存|内存|收敛|指标|结果|loss|accuracy|precision|recall|f1\b|auc\b|rmse|mae\b|performance|latency|throughput'
     analysis = r'为什么|为何|原因|退化|变慢|下降|提升|差这么|差异|比较|对比|\bwhy\b|\bworse\b|\bcompare\b'

@@ -190,7 +190,9 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     # Exact code packets have a reserved slot below; do not send them twice.
     slim_context.pop('source_task_evidence',None)
     slim_context.pop('source_loss_definitions',None)
+    slim_context.pop('runtime_printed_values',None)
     from ..services.paper_question_evidence import whole_paper_passages
+    from ..services.runtime_log_records import pack_printed_values
     paper_passages = context.get('paper_relevant_evidence') or []
     slim_context.pop('paper_relevant_evidence', None)
     if paper_passages:
@@ -209,6 +211,7 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     envelope = {'question': question, 'project_evidence': context,
                 'selected_source_evidence_not_execution_proof': whole_source_packets(context.get('source_task_evidence'), int(limit * (.55 if paper_passages else .7))),
                 'selected_paper_evidence': whole_paper_passages(paper_passages, int(limit * .25)),
+                'runtime_printed_values':pack_printed_values(context.get('runtime_printed_values'),min(2000,int(limit*.15))),
                 'source_loss_definitions_not_execution_proof': context.get('source_loss_definitions', [])[:4],
                 'public_author_archive_files_not_download_proof': [row.get('filename') for row in
                     (context.get('author_archive_data_evidence') or {}).get('public_files', [])[:30]],
@@ -809,7 +812,8 @@ async def _context(db: AsyncSession, project: Project, question: str = "", run_i
         context["paper_relevant_excerpts"] = _matching_excerpts(paper.content_text or "", terms, limit=5)
         from ..services.paper_question_evidence import paper_question_passages
         context['paper_relevant_evidence'] = paper_question_passages(
-            paper.content_text or '', question, paper.filename)
+            paper.content_text or '', question, paper.filename,
+            method_name=str((job.paper_spec or {}).get('model_name') or '') if job else '')
     if not job:
         return context
     result = job.result_json or {}
@@ -902,9 +906,12 @@ def _workspace_context(context, job, workspace, question, terms,
     """Filesystem/AST retrieval must not block chat actions or streaming on the event loop."""
     result=job.result_json or {}
     if asks_diagnosis or asks_device or asks_results:
+        logs = execution_logs(workspace,job.id,limit=12)
+        from ..services.runtime_log_records import select_printed_values
+        context['runtime_printed_values'] = json.loads(_redact(json.dumps(select_printed_values(logs,question),ensure_ascii=False)))
         context['execution_log_tails'] = [
-            {**row, 'head': _redact(row['head']), 'tail': _redact(row['tail'])}
-            for row in execution_logs(workspace, job.id, limit=12)]
+            {**{key:value for key,value in row.items() if key!='printed_json_values'}, 'head': _redact(row['head']), 'tail': _redact(row['tail'])}
+            for row in logs]
     if asks_results:
         telemetry = read_job_telemetry(workspace, job.id)["series"]
         context["live_training" if job.current_stage in {'executing', 'repairing', 'tuning'} and job.status == ReproductionStatus.executing
@@ -1769,6 +1776,8 @@ async def stream_answer(
                 "优先引用 selected_paper_evidence 和所选源码证据；论文原文、作者当前实现、本次配置和实际结果分别说明。"
                 "任何‘论文采用/要求/使用’或论文-代码差异断言，必须给出 selected_paper_evidence 中支持它的原文短句及来源；"
                 "作者仓库的可选类、代码默认值和历史回答不能当作论文原文。没有对应原文则明确待核实，不编造差异。"
+                "论文段落附带section_heading；Baselines/Related Work等段落的设置不能归给所选方法。方法名称提示仅用于检索，不证明参数归属。"
+                "判断论文与本次设置是否一致，须同时核对段落描述的具体方法/模型/数据集；不能仅因学习率数字相同就声称一致。"
                 "先回答当前选中实现；未选中的损失、分类头或其他分支只有在用户明确要求比较时才展开。"
                 "引用代码必须逐字来自带行号的当前源码片段；不允许凭记忆编造代码后标注文件行号。"
                 "方法问题须直接解释所问机制、公式及其代码对应，不以性能猜测或设备模板替代。"
@@ -1794,6 +1803,7 @@ async def stream_answer(
                 "live_training 是实际日志解析的最新逐轮进度；没有最终 dataset_results 时不得把 loss 当成最终评估结果。"
                 "metric_partition=test仅表示该行指标来自测试分区；没有该字段或为unscoped时不能将训练loss或未标明分区的指标说成测试值。"
                 "execution_log_tails 包括当前实验磁盘日志的开头和末尾，优先于可能滞后的 job.logs_tail；"
+                "runtime_printed_values来自当前实验进程实际打印的JSON日志，保留字段路径以区分requested/cli_args与实际记录；不是独立探测或论文设置。"
                 "proposed_tuning_plans_not_executed 是待确认的建议，不是已执行实验。调参不得由测试分数触发或选参，"
                 "verified_run_facts 是未按片段预算裁剪的当前结构化事实，数量、参数范围、历史尝试以此为准。"
                 "历史 assistant 回答可能错误，不能用其替代当前 verified_run_facts；只根据当前证据纠正历史错误。"

@@ -24,11 +24,15 @@ def execution_logs(workspace, job_id, limit=3):
             head = startup[:1800]
             reader.seek(max(0, path.stat().st_size - 1800))
             tail = reader.read().decode('utf-8', errors='replace')
+            reader.seek(max(0,path.stat().st_size-65536))
+            recent = reader.read().decode('utf-8',errors='replace')
         # Framework startup warnings can push first-step placement beyond the
         # ordinary context head. Keep only bounded device lines, not 64KB of noise.
         device_lines = '\n'.join(line[:350] for line in startup.splitlines()
                                  if re.search(r'/device:(?:gpu|cpu):\d+', line, re.I) or MODEL_DEVICE.search(line))[:5600]
-        result.append({'log': path.name, 'head': head, 'tail': tail,
+        from .runtime_log_records import printed_json_values
+        printed = printed_json_values(startup,path.name,'startup') + printed_json_values(recent,path.name,'recent_tail')
+        result.append({'log': path.name, 'head': head, 'tail': tail, 'printed_json_values':printed,
                        'device_lines': device_lines,
                        'updated_at': path.stat().st_mtime})
     return result
@@ -37,6 +41,14 @@ def execution_logs(workspace, job_id, limit=3):
 def device_log_evidence(logs):
     findings = []
     for item in logs:
+        for record in item.get('printed_json_values',[]):
+            path,value=record['path'],record['value']
+            if re.search(r'cli_args|requested|proposed|config',path,re.I):continue
+            if path.split('.')[-1] not in {'train_device','training_device','model_param_device','model_parameter_device','model_device','encoder_device'}:continue
+            if not isinstance(value,str) or not re.fullmatch(r'cuda(?::\d+)?|cpu',value):continue
+            kind='training_device_cpu' if value=='cpu' else 'training_device_gpu'
+            finding={'log':item['log'],'kind':kind,'line':path+'='+value,'source':'author_printed_json_not_operator_trace'}
+            if finding not in findings:findings.append(finding)
         for line in (item.get('head', '') + '\n' + item.get('device_lines', '')
                      + '\n' + item.get('tail', '')).splitlines():
             lower = line.lower()

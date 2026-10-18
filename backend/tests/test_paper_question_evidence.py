@@ -35,3 +35,21 @@ def test_code_pressure_does_not_evict_all_paper_evidence_or_cut_passages():
     assert packet['passages'] and packet['omitted_due_to_budget'] > 0
     assert all(value == row for value in packet['passages'])
     assert whole_paper_passages([row], 100)['passages'] == []
+
+
+def test_current_method_parameters_outrank_baseline_and_keep_section_provenance():
+    paper=('4.1 Baselines\nGeneric model uses a learning rate of 2e-5 and batch size of 4.\n'
+           + '\n'.join(['Discussion of baseline details.']*20)
+           + '\n4.2 Experimental Setup\nWe fine-tune TargetModel with cosine-similarity loss.\n'
+             'Its learning rate is 1e-3, with batch size 16, for one epoch.\n')
+    rows=paper_question_passages(paper,'当前方法的学习率是什么？','paper.pdf',limit=1,method_name='TargetModel')
+    assert '1e-3' in rows[0]['text'] and '2e-5' not in rows[0]['text']
+    assert rows[0]['section_heading']=='4.2 Experimental Setup'
+    assert paper.splitlines()[rows[0]['section_line']-1]==rows[0]['section_heading']
+    adjacent=paper.replace('\n'.join(['Discussion of baseline details.']*20), '')
+    row=paper_question_passages(adjacent,'学习率是什么？',limit=1,method_name='TargetModel')[0]
+    assert '1e-3' in row['text'] and '2e-5' not in row['text']
+    comparison=paper_question_passages(paper,'比较当前方法与基线的学习率',limit=2,method_name='TargetModel')
+    assert len(comparison)==2
+    assert {'4.1 Baselines','4.2 Experimental Setup'}=={row['section_heading'] for row in comparison}
+    assert '2e-5' in '\n'.join(row['text'] for row in comparison)
