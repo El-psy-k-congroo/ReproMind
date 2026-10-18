@@ -4,8 +4,10 @@ from app.config import Settings
 from app.services.reproduction_engine import extract_repository_urls, validate_repository_url
 
 
-def test_moma_model_routing_uses_role_specific_models():
+def test_moma_model_routing_uses_role_specific_models(tmp_path):
     settings = Settings(
+        _env_file=None,
+        model_routing_path=tmp_path / 'routing.json',
         model_provider="moma",
         moma_api_key="test-key",
         moma_model_chat="moma/chat",

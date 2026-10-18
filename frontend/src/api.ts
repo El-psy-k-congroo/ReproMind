@@ -24,7 +24,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const timeout = window.setTimeout(() => controller.abort(new Error('请求超时，请重试')), timeoutMs)
   const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
   try {
-  const response = await fetch(`${API_BASE}${path}`, { ...options, signal })
+  const headers = new Headers(options?.headers)
+  headers.set('X-ReproMind-Request', '1')
+  const response = await fetch(`${API_BASE}${path}`, { ...options, credentials:'same-origin', headers, signal })
+  if (response.status === 401) window.dispatchEvent(new Event('repromind:auth-expired'))
   if (!response.ok) {
     let message = `请求失败（${response.status}）`
     try {
@@ -100,7 +103,7 @@ request<{ datasets: string[]; current_local_dataset_evidence?: Record<string, { 
   tuningPlan: (projectId: string, runId: string, purpose: 'recovery' | 'validation_optimization' = 'recovery') => request<{ plans: TuningPlan[]; executed: boolean }>(`/projects/${projectId}/reproductions/${runId}/tuning-plan?purpose=${purpose}`),
   startTuning: (projectId: string, runId: string, plans: TuningPlan[], purpose: 'recovery' | 'validation_optimization' = 'recovery') =>
     request<{ run_id: string; session_id: string }>(`/projects/${projectId}/reproductions/${runId}/tuning-sessions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials:'same-origin', headers: { 'Content-Type': 'application/json', 'X-ReproMind-Request':'1' },
       body: JSON.stringify({ datasets: plans.map(plan => plan.dataset), budget: 6, purpose,
         review_tokens: Object.fromEntries(plans.map(plan => [plan.dataset, plan.review_token])) }),
     }),
@@ -146,11 +149,12 @@ request<{ datasets: string[]; current_local_dataset_evidence?: Record<string, { 
     request<CopilotMessage[]>(`/projects/${projectId}/copilot/conversations/${conversationId}/messages`),
   streamCopilot: async (projectId: string, conversationId: string, question: string, modelId: string, requestId: string, runId = '', signal?: AbortSignal): Promise<Response> => {
     const response = await fetch(`${API_BASE}/projects/${projectId}/copilot/conversations/${conversationId}/stream`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials:'same-origin', headers: { 'Content-Type': 'application/json', 'X-ReproMind-Request':'1' },
       body: JSON.stringify({ question, model_id: modelId, request_id: requestId, run_id: runId }),
       signal,
     })
     if (!response.ok) {
+      if (response.status === 401) window.dispatchEvent(new Event('repromind:auth-expired'))
       const body = await response.json().catch(() => ({}))
       throw new Error(errorDetail(body?.detail, `流式请求失败（${response.status}）`))
     }

@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import get_settings
 from ..database import get_db
-from ..deployment import check_demo_capacity
+from ..auth import current_owner
 from ..models import Artifact, ArtifactKind, Project, ReproductionJob, ReproductionStatus
 from ..schemas import ArtifactRead, ProjectCreate, ProjectListItem, ProjectRead
 from ..services.file_parser import parse_bytes
@@ -52,6 +52,7 @@ async def list_projects(db: AsyncSession = Depends(get_db)) -> list[ProjectListI
         await db.scalars(
             select(Project)
             .where(Project.status == "active")
+            .where(Project.owner_id == current_owner.get() if current_owner.get() else True)
             .order_by(Project.updated_at.desc())
         )
     ).all()
@@ -79,8 +80,9 @@ async def list_projects(db: AsyncSession = Depends(get_db)) -> list[ProjectListI
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
 async def create_project(payload: ProjectCreate, db: AsyncSession = Depends(get_db)) -> Project:
-    await check_demo_capacity(db, new_project=True)
-    project = Project(tenant_id=get_settings().default_tenant_id, **payload.model_dump())
+    owner = current_owner.get()
+    project = Project(tenant_id=f'user_{owner}' if owner else get_settings().default_tenant_id,
+                      owner_id=owner, **payload.model_dump())
     db.add(project)
     await db.flush()
     return await _project_or_404(db, project.id)
@@ -166,7 +168,10 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)) ->
             _remove_owned_tree(prefix)
             continue
         try:
-            result = await asyncio.to_thread(subprocess.run, [conda, "env", "remove", "--yes", "--prefix", str(prefix)],
+            from ..services.execution_sandbox import sandbox_command
+            work = Path(job.workspace_path)
+            argv, env = sandbox_command([conda, "env", "remove", "--yes", "--prefix", str(prefix)], work, os.environ.copy(), workspace=work)
+            result = await asyncio.to_thread(subprocess.run, argv, env=env,
                                              capture_output=True, text=True, timeout=180, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HTTPException(status_code=500, detail=f"Conda 环境 {name} 删除失败：{exc}") from exc
@@ -199,7 +204,6 @@ async def upload_artifact(
         raise HTTPException(status_code=413, detail=f"文件不能超过 {settings.max_upload_mb} MB")
     if not data:
         raise HTTPException(status_code=400, detail="文件为空")
-    await check_demo_capacity(db, upload_bytes=len(data))
 
     safe_name = (file.filename if file.filename is not None else "artifact.bin").replace("\\", "/").rsplit("/", 1)[-1]
     if (not safe_name or safe_name in {".", ".."} or safe_name.endswith((".", " "))

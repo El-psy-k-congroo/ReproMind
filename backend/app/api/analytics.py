@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models import CopilotMessage, Project, ReproductionJob
+from ..auth import current_owner
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -14,10 +15,11 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 async def overview(db: AsyncSession = Depends(get_db)) -> dict:
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=30)
-    projects = await db.scalar(select(func.count(Project.id)).where(Project.status == "active")) or 0
-    jobs = (await db.scalars(select(ReproductionJob).where(ReproductionJob.created_at >= since))).all()
+    owned = select(Project.id).where(Project.owner_id == current_owner.get()) if current_owner.get() else select(Project.id)
+    projects = await db.scalar(select(func.count(Project.id)).where(Project.status == "active", Project.id.in_(owned))) or 0
+    jobs = (await db.scalars(select(ReproductionJob).where(ReproductionJob.created_at >= since, ReproductionJob.project_id.in_(owned)))).all()
     copilot_calls = (await db.scalars(select(CopilotMessage).where(
-        CopilotMessage.created_at >= since, CopilotMessage.role == "assistant",
+        CopilotMessage.created_at >= since, CopilotMessage.role == "assistant", CopilotMessage.project_id.in_(owned),
     ))).all()
     reproduction_tokens = sum(
         int((job.code_spec or {}).get("model_usage", {}).get("total_tokens", 0)) for job in jobs

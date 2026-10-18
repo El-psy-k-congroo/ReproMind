@@ -7,10 +7,10 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .api import analytics, copilot, experiment_branches, models_catalog, model_routing, projects, reproductions
+from .api import analytics, authentication, copilot, experiment_branches, models_catalog, model_routing, projects, reproductions
 from .config import get_settings
 from .database import close_database, init_database
-from .deployment import enforce_deployment_capabilities
+from .auth import enforce_access
 
 
 @asynccontextmanager
@@ -40,22 +40,30 @@ app = FastAPI(
     version="0.1.0",
     description="Paper reproduction, project code collaboration and experiment execution API",
     lifespan=lifespan,
-    dependencies=[Depends(validate_resource_ids), Depends(enforce_deployment_capabilities)],
+    dependencies=[Depends(validate_resource_ids)],
 )
+
+
+@app.middleware('http')
+async def private_api_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=([settings.public_origin] if settings.deployment_mode == 'server' and settings.public_origin
+                   else ["http://localhost:5173", "http://127.0.0.1:5173"]),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(projects.router, prefix="/api")
-app.include_router(reproductions.router, prefix="/api")
-app.include_router(experiment_branches.router, prefix="/api")
-app.include_router(models_catalog.router, prefix="/api")
-app.include_router(model_routing.router, prefix="/api")
-app.include_router(analytics.router, prefix="/api")
-app.include_router(copilot.router, prefix="/api")
+app.include_router(authentication.router, prefix="/api")
+for router in (projects.router, reproductions.router, experiment_branches.router,
+               models_catalog.router, model_routing.router, analytics.router, copilot.router):
+    app.include_router(router, prefix="/api", dependencies=[Depends(enforce_access)])
 
 
 @app.get("/api/health")
@@ -71,14 +79,13 @@ def health() -> dict:
 
 @app.get("/api/deployment")
 def deployment_info() -> dict:
-    demo = settings.deployment_mode == "demo"
     return {
         "mode": settings.deployment_mode,
-        "execution_enabled": not demo,
-        "shared_workspace": demo,
+        "execution_enabled": True,
+        "shared_workspace": False,
+        "auth_required": settings.deployment_mode == "server",
         "repository_url": "https://github.com/El-psy-k-congroo/ReproMind",
-        "notice": ("云端评审工作区 · 2核 / 2GB / 无GPU。可创建项目、上传材料和使用复现助手；"
-                   "仓库下载、环境安装、代码修改与实验执行请使用本地部署。此为共享工作区，请勿上传私密材料。") if demo else "",
+        "notice": "",
     }
 
 

@@ -13,8 +13,15 @@ GROUPS = {
 }
 
 
-def read_policy(settings):
+def policy_path(settings):
+    from ..auth import current_owner
+    owner = current_owner.get()
     path = Path(settings.model_routing_path)
+    return path.parent / 'users' / owner / path.name if owner else path
+
+
+def read_policy(settings):
+    path = policy_path(settings)
     if not path.exists():
         return {'models': {}, 'revision': ''}
     if path.stat().st_size > 32000:
@@ -30,7 +37,7 @@ def read_policy(settings):
 
 
 def write_policy(settings, models):
-    path = Path(settings.model_routing_path)
+    path = policy_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {'provider': settings.model_provider.lower().strip(), 'models': models,
             'revision': str(uuid4()), 'updated_at': datetime.now(timezone.utc).isoformat()}

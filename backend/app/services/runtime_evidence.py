@@ -128,14 +128,18 @@ async def probe_framework(python, framework, verify_compute=False, visible_devic
         if visible_devices is not None:
             env['CUDA_VISIBLE_DEVICES'] = str(visible_devices)
         try:
-            process = subprocess.run([str(python), '-c', script], capture_output=True,
-                                     text=True, timeout=90 if verify_compute else 30, check=False, env=env)
+            from .execution_sandbox import sandbox_command, interpreter_workspace
+            from ..config import get_settings
+            work = interpreter_workspace(python) if getattr(get_settings(), 'execution_sandbox', False) else Path.cwd()
+            argv, safe_env = sandbox_command([str(python), '-c', script], work, env, workspace=work)
+            process = subprocess.run(argv, capture_output=True,
+                                     text=True, timeout=90 if verify_compute else 30, check=False, env=safe_env)
             parsed = json.loads(process.stdout.strip().splitlines()[-1]) if process.returncode == 0 else {}
             return {'checked': process.returncode == 0, **parsed,
                     'error_kind': 'framework_missing' if process.returncode and re.search(
                         r"No module named ['\"](?:torch|tensorflow)['\"]", process.stderr) else '',
                     'error': process.stderr[-300:] if process.returncode else ''}
-        except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        except (OSError, subprocess.TimeoutExpired, ValueError, IndexError, RuntimeError) as exc:
             return {'checked': False, 'framework': framework, 'error': str(exc)[:200]}
     # Concurrent UI/chat requests share one runtime subprocess. Client timeout
     # must not start another GPU context while the previous probe is still alive.
@@ -155,13 +159,16 @@ async def probe_interpreter(python):
     """Read ABI even when torch is missing; importing a framework must not hide Python."""
     def probe():
         try:
-            process = subprocess.run([str(python), '-c',
+            from .execution_sandbox import sandbox_command, interpreter_workspace
+            from ..config import get_settings
+            work = interpreter_workspace(python) if getattr(get_settings(), 'execution_sandbox', False) else Path.cwd()
+            argv, env = sandbox_command([str(python), '-c',
                 "import json,sys,platform;print(json.dumps({'python_version':list(sys.version_info[:2]),"
-                "'platform':sys.platform,'machine':platform.machine()}))"],
-                capture_output=True, text=True, timeout=12, check=False)
+                "'platform':sys.platform,'machine':platform.machine()}))"], work, os.environ.copy(), workspace=work)
+            process = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=12, check=False)
             if process.returncode:
                 return {}
             return json.loads(process.stdout.strip().splitlines()[-1])
-        except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        except (OSError, subprocess.TimeoutExpired, ValueError, IndexError, RuntimeError):
             return {}
     return await asyncio.to_thread(probe)

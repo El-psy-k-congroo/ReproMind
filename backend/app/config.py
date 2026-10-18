@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "127.0.0.1"
     app_port: int = 8010
-    deployment_mode: Literal["local", "demo"] = "local"
-    demo_max_projects: int = Field(default=12, ge=1, le=100)
-    demo_max_storage_mb: int = Field(default=256, ge=1, le=2048)
+    deployment_mode: Literal["local", "server"] = "local"
+    public_origin: str = ""
+    session_secure_cookie: bool = True
+    execution_sandbox: bool = False
     default_tenant_id: str = "tenant_default"
 
     # 与 EduAgent 一致：支持拆分的 PostgreSQL 配置，也允许 DATABASE_URL 覆盖。

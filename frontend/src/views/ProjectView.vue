@@ -12,7 +12,6 @@ const route = useRoute()
 const router = useRouter()
 const project = ref<Project | null>(null)
 const loading = ref(true)
-const demoMode = ref(false)
 const uploading = ref(false)
 const error = ref('')
 const showUpload = ref(false)
@@ -262,7 +261,6 @@ function formatBytes(value: number) {
 }
 
 onMounted(async () => {
-  void api.deployment().then(info => { demoMode.value = info.mode === 'demo' }).catch(() => {})
   const initialModel = selectedModel.value
   void (async () => { try {
     modelCatalog.value = await api.listModels()
@@ -300,17 +298,22 @@ onUnmounted(stopReproductionPolling)
         <p>{{ project.description }}</p>
       </div>
       <div class="project-actions">
-        <input v-model="reproductionGoal" aria-label="本次复现目标" maxlength="500" placeholder="例如：仅运行 Cora 的核心实验" />
-        <input v-model="authorRepository" aria-label="本次作者源码地址" maxlength="500" placeholder="作者 GitHub / Zenodo 地址（可选）" />
+        <div class="task-config-fields">
+          <label class="task-field"><span>复现目标</span><input v-model="reproductionGoal" aria-label="本次复现目标" maxlength="500" placeholder="说明本次实验的模型与数据范围" /></label>
+          <label class="task-field"><span>作者源码 <small>可选</small></span><input v-model="authorRepository" aria-label="本次作者源码地址" maxlength="500" placeholder="GitHub / Gitee / Zenodo 仓库地址" /></label>
+        </div>
+        <div class="task-action-row">
         <div class="model-menu-wrap"><button class="model-menu-trigger" :aria-expanded="showModelMenu" @click="showModelMenu = !showModelMenu"><span>模型</span><strong>{{ selectedModel }}</strong><b>⌄</b></button><div v-if="showModelMenu" class="model-menu"><small>新复现任务使用此模型</small><button v-for="model in modelCatalog?.models || [{ id: selectedModel, label: selectedModel }]" :key="model.id" :class="{ selected: selectedModel === model.id }" @click="selectedModel = model.id; showModelMenu = false">{{ model.label }}<span v-if="selectedModel === model.id">✓</span></button></div></div>
         <button class="button secondary" @click="uploadKind = 'paper'; showUpload = !showUpload">＋ 添加证据</button>
         <button class="button secondary" @click="showCopilot = true">复现协作</button>
         <button v-if="reproduction && (['queued', 'running', 'executing'].includes(reproduction.status) || (!!reproduction.result_json.ablation_active || !!reproduction.result_json.tuning_active) && reproduction.status === 'completed')" class="button secondary" @click="pauseReproduction">暂停任务</button>
         <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">恢复任务</button>
         <button class="button ghost danger-text" :disabled="deletingProject" @click="deleteCurrentProject">{{ deletingProject ? '正在删除项目与环境…' : '删除项目' }}</button>
-        <button class="button primary" :title="demoMode ? '请在本地部署后运行完整复现流程' : ''" :disabled="demoMode || startingReproduction || !project.artifacts.some(item => item.kind === 'paper') || runHistory.some(item => ['queued', 'running', 'executing'].includes(item.status))" @click="startReproduction">
+        <button class="button primary" :title="!project.artifacts.some(item => item.kind === 'paper') ? '请先上传论文，再启动复现' : ''" :disabled="startingReproduction || !project.artifacts.some(item => item.kind === 'paper') || runHistory.some(item => ['queued', 'running', 'executing'].includes(item.status))" @click="startReproduction">
           <span v-if="startingReproduction" class="loader small"></span>{{ startingReproduction ? '正在创建…' : '启动自主复现' }}
         </button>
+        </div>
+        <p v-if="!project.artifacts.some(item => item.kind === 'paper')" class="task-prerequisite">上传论文后，即可开始解析作者代码与规划实验。</p>
       </div>
     </header>
 

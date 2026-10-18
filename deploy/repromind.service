@@ -9,6 +9,10 @@ Group=repromind
 WorkingDirectory=/opt/repromind/backend
 EnvironmentFile=/etc/repromind/repromind.env
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/repromind
+Environment=CONDA_EXE=/opt/repromind-conda/bin/conda
+Environment=CONDA_ENVS_PATH=/var/lib/repromind/environments
+Environment=PATH=/opt/repromind-conda/bin:/opt/repromind-api-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/repromind-api-venv/bin/python run_server.py
 Restart=on-failure
 RestartSec=5
@@ -16,12 +20,15 @@ TimeoutStopSec=30
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=100.100.100.200/32
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/repromind
-MemoryMax=1100M
-CPUQuota=150%
-TasksMax=80
+MemoryMax=1500M
+MemorySwapMax=2G
+CPUQuota=180%
+TasksMax=192
 LimitNOFILE=4096
 
 [Install]

@@ -17,7 +17,7 @@ import zipfile
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, BoundedSemaphore
 from typing import Any
 from urllib.parse import urlparse
 
@@ -49,6 +49,7 @@ from .source_selection import entry_sources
 from .author_data_loaders import declared_hub_loaders
 from .task_context import task_contract
 from .runtime_compatibility import terminal_exception, compatibility_plan
+from .execution_sandbox import current_workspace, sandbox_command, environment_root
 
 
 REPOSITORY_PATTERN = re.compile(
@@ -70,6 +71,7 @@ METRIC_PATTERN = re.compile(
 
 CURRENT_JOB_ID: ContextVar[str] = ContextVar("reproduction_job_id", default="")
 _ACTIVE_PROCESSES: dict[str, subprocess.Popen] = {}
+_SERVER_EXECUTION_SLOT = BoundedSemaphore(1)
 _ACTIVE_WORKERS: set[str] = set()
 _PROCESS_LOCK = Lock()
 _PAUSE_REQUESTED: set[str] = set()
@@ -346,8 +348,9 @@ async def _run_process(
         child_failure = False
         raw = b""
         try:
+            process_argv, process_env = sandbox_command(argv, cwd, env)
             process = subprocess.Popen(
-                argv, cwd=str(cwd), env=env,
+                process_argv, cwd=str(cwd), env=process_env,
                 stdout=writer if writer else subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
@@ -394,7 +397,16 @@ async def _run_process(
             f"\n命令超过 {timeout_seconds} 秒，已终止。" if timed_out else ""
         )
 
-    return await asyncio.to_thread(invoke)
+    def scheduled_invoke():
+        if not getattr(get_settings(), 'execution_sandbox', False):
+            return invoke()
+        while not _SERVER_EXECUTION_SLOT.acquire(timeout=1):
+            _raise_if_paused(CURRENT_JOB_ID.get())
+        try:
+            return invoke()
+        finally:
+            _SERVER_EXECUTION_SLOT.release()
+    return await asyncio.to_thread(scheduled_invoke)
 
 
 async def _run_author_process(*args, **kwargs):
@@ -954,6 +966,8 @@ def _conda_executable() -> str:
 def _named_environment_prefix(conda: str, environment_name: str) -> Path:
     if not conda:
         return Path()
+    if getattr(get_settings(), 'execution_sandbox', False):
+        return environment_root() / environment_name
     # A named Conda environment is not necessarily stored beside the Conda
     # installation.  Conda may be configured to use the per-user envs_dirs
     # (which is the case on the development machine), so ask Conda for the
@@ -2039,6 +2053,7 @@ async def _generate_scaffold(paper_text: str, paper_spec: dict[str, Any], model_
 async def prepare_reproduction(job_id: str) -> None:
     _begin_work(job_id)
     token = CURRENT_JOB_ID.set(job_id)
+    workspace_token = current_workspace.set(None)
     try:
         async with AsyncSessionLocal() as session:
             job = await session.scalar(
@@ -2073,6 +2088,7 @@ async def prepare_reproduction(job_id: str) -> None:
             )
             await _advance(session, job, "repo_discovery", 24, "Source Agent 正在优先定位作者仓库或上传源码")
             workspace = _project_workspace(job.project)
+            current_workspace.set(workspace)
             run_workspace = _run_workspace(workspace, job.id)
             _copy_paper_sources(job.project.artifacts, workspace)
             job.workspace_path = str(workspace)
@@ -2372,6 +2388,7 @@ async def prepare_reproduction(job_id: str) -> None:
                 job.completed_at = datetime.now(timezone.utc)
                 await _advance(session, job, "failed", job.progress, "复现准备失败", status=ReproductionStatus.failed)
     finally:
+        current_workspace.reset(workspace_token)
         CURRENT_JOB_ID.reset(token)
         _end_work(job_id)
 
@@ -4275,12 +4292,14 @@ def _write_reproduction_report(job: ReproductionJob, workspace: Path) -> Path:
 async def execute_reproduction(job_id: str) -> None:
     _begin_work(job_id)
     token = CURRENT_JOB_ID.set(job_id)
+    workspace_token = current_workspace.set(None)
     try:
         async with AsyncSessionLocal() as session:
             job = await session.get(ReproductionJob, job_id)
             if job is None or job.status != ReproductionStatus.executing:
                 return
             workspace = Path(job.workspace_path).resolve()
+            current_workspace.set(workspace)
             if not workspace.is_dir():
                 raise ValueError("论文项目工作区不存在")
             env_python = await _ensure_environment(session, job, workspace)
@@ -4762,5 +4781,6 @@ async def execute_reproduction(job_id: str) -> None:
                                "环境准备失败，实验尚未启动" if environment_failure else "执行失败",
                                status=job.status)
     finally:
+        current_workspace.reset(workspace_token)
         CURRENT_JOB_ID.reset(token)
         _end_work(job_id)
