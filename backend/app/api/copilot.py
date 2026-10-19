@@ -546,6 +546,9 @@ def _status_question(question: str) -> bool:
     lowered = question.lower()
     if _code_action_requested(question) or _rerun_requested(question) or _experiment_control_requested(question):
         return False
+    if re.search(r'论文中|论文里|论文配置|隐藏维度|学习率|权重衰减|公式|损失函数|模型结构|数据划分|'
+                 r'\bdropout\b|\bhidden\w*\b|\bweight_decay\b|\blearning.rate\b|\bhyperparameters?\b',lowered):
+        return False  # Mixed knowledge/status requests need the full paper and run context.
     if (any(term in lowered for term in ('下载', '构建环境', '安装环境', '环境安装', '环境构建'))
             and any(term in lowered for term in ('出错', '错误', '失败', '超时', '卡', '进度', '正在', '干什么', '哪一步', '怎么样'))):
         return True

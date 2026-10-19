@@ -1,6 +1,7 @@
 import json
 
 from app.api.copilot import _bounded_prompt
+from app.api.copilot import _status_question
 from app.services.paper_question_evidence import paper_question_passages, whole_paper_passages
 
 
@@ -65,3 +66,13 @@ def test_mixed_graph_question_keeps_normalization_before_training_details():
     packed=whole_paper_passages(rows, 3750)['passages']
     assert any('symmetric normalization' in row['text'] for row in packed)
     assert any('learning rate' in row['text'] for row in packed)
+
+
+def test_status_shortcut_does_not_swallow_parameter_and_paper_questions():
+    for question in (
+        '只解释不修改：论文中隐藏维度和dropout分别是多少？数据从哪里下载，目前到了哪一步？',
+        '当前数据划分和权重衰减是什么，训练到第几轮了？',
+        'What are the learning rate and dropout, 当前进度如何？',
+    ):
+        assert not _status_question(question)
+    assert _status_question('目前下载到哪一步了？')
