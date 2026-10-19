@@ -155,15 +155,18 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     job = context.get('job') or {}
     # Protect small structured facts before trimming large paper/source/history payloads.
     # A list of two real trials must not silently become a claim of one trial.
-    def rows(values, fields):
-        return [{key: row[key] for key in fields if key in row} for row in values[:12] if isinstance(row, dict)]
+    def rows(values, fields, count=12):
+        return [{key: row[key] for key in fields if key in row} for row in values[:count] if isinstance(row, dict)]
     plans = context.get('proposed_tuning_plans_not_executed') or job.get('tuning_plans') or []
     named = [plan for plan in plans if str(plan.get('dataset', '')).lower() in question.lower()]
     plans = named or plans
     facts = {
         'run_id': job.get('run_id'), 'status': job.get('status'), 'stage': job.get('stage'),
         'paper_parameters_not_runtime': rows((job.get('paper_spec') or {}).get('hyperparameters') or [],
-            ['name', 'value', 'source', 'evidence']),
+            ['name', 'value', 'dataset', 'datasets', 'source', 'evidence'],16),
+        'current_source_evidence': context.get('current_source_evidence'),
+        'dataset_download_plans_not_download_proof': rows((job.get('dataset_spec') or {}).get('download_requests') or [],
+            ['dataset','url','source','paper_version_verified','downloaded','repository_name']),
         'tuning_active': job.get('tuning_active'),
         'tuning_sessions': job.get('tuning_sessions'),
         'dataset_results_count': job.get('dataset_results_count'),
@@ -985,6 +988,10 @@ def _workspace_context(context, job, workspace, question, terms,
                                 or (job.code_spec or {}).get("draft_source") or "")).resolve()
     sources = source_candidate if source_candidate.is_dir() and workspace in source_candidate.parents else workspace / "sources"
     sources = _native_path(sources)
+    context['current_source_evidence'] = {
+        'ready':source_candidate.is_dir() and workspace in source_candidate.parents,
+        'path':str(sources),'repository_url':job.repository_url,
+        'note':'本次只读目录检查；早期下载或克隆错误是历史尝试，不能推翻当前已获取的作者源码。'}
     question_entries = question_entrypoints(sources, job.code_spec or {}, question) if asks_code or asks_parameters else (job.code_spec or {}).get('entrypoints', [])
     task_evidence = {'recorded_entrypoints': (job.code_spec or {}).get('entrypoints', [])[:1],
                      'question_selected_entrypoints': question_entries[:1],
@@ -1877,6 +1884,9 @@ async def stream_answer(
                 "说明已证实差异、合理假设和缺失证据；建议一次只改变一项的受控对照，不执行训练或修改。"
                 "tuning_policy.recorded=false 表示旧记录未保存策略，不能推断人工操作或没有自动调参。"
                 "dataset_spec 是准备阶段快照；不能把它的缺失信息当作实时状态。current_local_dataset_evidence 才是本次文件检查。"
+                "current_source_evidence 是当前源码目录检查，ready=true时不能根据历史git传输错误声称源码未获取；系统可能已通过备用传输成功。"
+                "dataset_download_plans_not_download_proof 保留已发现来源；URL存在但未下载就绪时，直接说明来源和当前阶段，不得说没有来源，也不能说已下载。"
+                "paper_parameters_not_runtime 的dataset/datasets限定适用范围，不能混为所有数据集共同参数。"
                 "日志的不同 attempt 是不同尝试，不能把一条日志的验证值关联到另一条调参记录。"
                 "tuning_selected=true 的结果改变了原超参数，不等于按论文原配置复现。证据截短不代表原文不存在，不能据此断言未实现。"
                 "调参 trial.selected 是验证集选出的候选；dataset.tuning_selected 表示是否采用为最终数据集结果，二者不同。"
