@@ -170,7 +170,11 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
         'dataset_result_rows_complete': min(12, len(job.get('dataset_results') or job.get('dataset_results_preview') or [])) == job.get('dataset_results_count'),
         'dataset_results': rows(job.get('dataset_results') or job.get('dataset_results_preview') or [],
             ['dataset', 'metric_key', 'metrics', 'target', 'delta', 'verdict', 'tuning_selected', 'baseline_metrics',
-             'comparison_scope', 'comparison_basis', 'metric_partition']),
+             'comparison_scope', 'comparison_basis', 'metric_partition', 'baseline_parameters', 'baseline_argv',
+             'parameter_differences', 'baseline_verdict']),
+        'related_recorded_runs': rows(context.get('run_history', []),
+            ['run_id', 'status', 'source_mode', 'parent_run_id', 'dataset_results'])[:8],
+        'related_recorded_runs_omitted': max(0, len(context.get('run_history', []))-8),
         'tuning_attempts_total': job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempt_rows_complete': min(12, len(job.get('tuning_attempts') or [])) == job.get('tuning_attempts_count', len(job.get('tuning_attempts') or [])),
         'tuning_attempts': rows(job.get('tuning_attempts') or [],
@@ -188,7 +192,7 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     slim_context = {**context, 'job': {key: value for key, value in job.items() if key not in {
         'dataset_results', 'dataset_results_preview', 'tuning_attempts', 'tuning_plans', 'dataset_spec',
         'code_generation', 'paper_spec', 'claim_results'}},
-        'proposed_tuning_plans_not_executed': [], 'current_local_dataset_evidence': {}}
+        'proposed_tuning_plans_not_executed': [], 'current_local_dataset_evidence': {}, 'run_history': []}
     # Exact code packets have a reserved slot below; do not send them twice.
     slim_context.pop('source_task_evidence',None)
     slim_context.pop('source_loss_definitions',None)
@@ -803,7 +807,7 @@ async def _context(db: AsyncSession, project: Project, question: str = "", run_i
     lower_question = question.lower()
     asks_data = any(term in lower_question for term in ("数据", "dataset", "下载", "文件缺失"))
     asks_diagnosis = any(term in lower_question for term in ("失败", "报错", "错误", "修复", "卡住", "为什么", "diagnos", "error", "repair"))
-    asks_history = performance or any(term in lower_question for term in ("比较", "历史", "上次", "之前", "哪次", "run ", "对照"))
+    asks_history = performance or any(term in lower_question for term in ("比较", "历史", "上次", "之前", "哪次", "run ", "对照", "原实验", "原配置", "修改前", "区分"))
     asks_parameters = any(term in lower_question for term in ("参数", "配置", "hidden", "dim", "dropout", "学习率", "batch", "seed"))
     asks_parameters = asks_parameters or any(term in lower_question for term in ('调参', '搜索空间', '超参数'))
     asks_device = any(term in lower_question for term in ('gpu', 'cuda', 'cpu', '显卡', '设备'))
@@ -819,7 +823,11 @@ async def _context(db: AsyncSession, project: Project, question: str = "", run_i
         "run_history": [
             {
                 "run_id": item.id, "status": item.status.value,
-                "dataset_results": (item.result_json or {}).get("dataset_results", [])[:5],
+                "source_mode": item.source_mode,
+                "parent_run_id": ((item.result_json or {}).get('revision') or (item.result_json or {}).get('rerun') or {}).get('base_run_id'),
+                "dataset_results": [{key: value for key,value in row.items() if key in {
+                    'dataset', 'metrics', 'baseline_metrics', 'baseline_parameters', 'comparison_scope', 'verdict'}}
+                    for row in (item.result_json or {}).get("dataset_results", [])[:5]],
                 "tuning_attempts": (item.result_json or {}).get("tuning_attempts", [])[:5],
                 "commands": (item.execution_command or {}).get("display", "")[:500],
             }
@@ -1848,7 +1856,8 @@ async def stream_answer(
                 "execution_log_tails 包括当前实验磁盘日志的开头和末尾，优先于可能滞后的 job.logs_tail；"
                 "runtime_printed_values来自当前实验进程实际打印的JSON日志，保留字段路径以区分requested/cli_args与实际记录；不是独立探测或论文设置。"
                 "proposed_tuning_plans_not_executed 是待确认的建议，不是已执行实验。调参不得由测试分数触发或选参，"
-                "verified_run_facts 是未按片段预算裁剪的当前结构化事实，数量、参数范围、历史尝试以此为准。"
+                "verified_run_facts 是当前结构化事实，baseline_parameters是执行时保存的参数，baseline_argv是该记录的实际命令，不得因源码摘录未展示默认值就说运行参数未记录。"
+                "related_recorded_runs 保留相关历史实验的参数和指标；区分作者仓库原始记录、修改记录与其重跑，parent_run_id不等于作者原始实验。"
                 "历史 assistant 回答可能错误，不能用其替代当前 verified_run_facts；只根据当前证据纠正历史错误。"
                 "dataset_result_rows_complete=false 只表示上下文截短，不表示未运行或指标不存在。"
                 "复现结论必须逐项读取当前 dataset_results 的 metrics/verdict；不要重复历史回答中的缺失结论。"

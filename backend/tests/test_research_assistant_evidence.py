@@ -420,3 +420,17 @@ def test_paper_parameter_values_survive_large_mixed_question_context():
         'paper_excerpt':'y'*30000}
     packed=json.loads(copilot._bounded_prompt('解释论文方法、划分、超参数和设备',context,[],''))
     assert packed['verified_run_facts']['paper_parameters_not_runtime']==parameters
+
+
+def test_executed_parameters_and_related_original_run_survive_source_pressure():
+    current={'dataset':'Example','metrics':{'accuracy':.81},'baseline_parameters':{'hidden_width':32},
+        'baseline_argv':['python','train.py','--hidden_width','32'],'comparison_scope':'modified_configuration'}
+    history=[{'run_id':'original','source_mode':'paper_repository',
+        'dataset_results':[{'dataset':'Example','baseline_parameters':{'hidden_width':16},'metrics':{'accuracy':.82}}]}]
+    context={'job':{'run_id':'selected','dataset_results':[current],'dataset_results_count':1},'run_history':history,
+        'source_relevant_excerpts':[{'file':'model.py','excerpt':'x'*3000}]*20}
+    packed=json.loads(copilot._bounded_prompt('区分原实验与修改后的参数',context,[],''))
+    facts=packed['verified_run_facts']
+    assert facts['dataset_results'][0]['baseline_parameters']=={'hidden_width':32}
+    assert facts['dataset_results'][0]['baseline_argv'][-1]=='32'
+    assert facts['related_recorded_runs']==history
