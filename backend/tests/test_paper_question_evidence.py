@@ -53,3 +53,15 @@ def test_current_method_parameters_outrank_baseline_and_keep_section_provenance(
     assert len(comparison)==2
     assert {'4.1 Baselines','4.2 Experimental Setup'}=={row['section_heading'] for row in comparison}
     assert '2e-5' in '\n'.join(row['text'] for row in comparison)
+
+
+def test_mixed_graph_question_keeps_normalization_before_training_details():
+    paper=('2 Propagation Model\nThe adjacency matrix includes self-connections.\n'
+           'We apply symmetric normalization and the renormalization trick.\n'
+           + '\n'.join(['Independent explanation.']*20)
+           + '\n5 Training Setup\nThe learning rate is 0.01 for 200 epochs.\n'
+             'Dataset splits contain validation and test nodes.\n')
+    rows=paper_question_passages(paper,'邻接矩阵如何归一化？数据划分和超参数是什么？是否必须用GPU？')
+    packed=whole_paper_passages(rows, 3750)['passages']
+    assert any('symmetric normalization' in row['text'] for row in packed)
+    assert any('learning rate' in row['text'] for row in packed)

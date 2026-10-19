@@ -86,6 +86,7 @@ const dependencySourceIsHistorical = computed(() => {
 })
 let gpuReadinessRequest = 0
 async function refreshGpuReadiness() {
+  if (!(props.run.code_spec.source_path || props.run.execution_command.pythonpath)) { gpuReadiness.value = null; return }
   const runId = props.run.id
   const request = ++gpuReadinessRequest
   try {
@@ -186,6 +187,7 @@ onMounted(() => { refreshActivity(); refreshGpuReadiness(); timer = window.setIn
 onUnmounted(() => { if (timer) window.clearInterval(timer) })
 watch(() => props.run.id, () => { activity.value = null; activityUnavailable.value = false; gpuReadiness.value = null; refreshActivity(); refreshGpuReadiness() })
 watch(() => props.run.status, refreshActivity)
+watch(() => props.run.code_spec.source_path || props.run.execution_command.pythonpath, refreshGpuReadiness)
 watch([() => props.run.status, () => props.run.current_stage, () => JSON.stringify(props.run.environment_spec.gpu_runtime_verified || null)], () => {
   if (['executing', 'completed', 'failed'].includes(props.run.current_stage)) refreshGpuReadiness()
 })

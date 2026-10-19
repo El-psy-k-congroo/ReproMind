@@ -8,7 +8,7 @@ from .metric_contract import dataset_targets,metric_name
 
 TARGET_EVIDENCE_PROMPT = (
     'target_evidence 是结果表证据列表，每项包含 dataset、metric、reported、method_label、columns、header_quote、row_quote。'
-    'header_quote 和 row_quote 必须逐字摘自论文。columns 是表头按原顺序排列的全部数据集；'
+    'header_quote 必须逐字包含数据集列名所在表头行，不能只引用 Table 标题；row_quote 必须逐字摘自论文。columns 是表头按原顺序排列的全部数据集；'
     'row_quote 是作者当前方法的完整同一结果行，包含所有数据集结果；method_label 是该行中的方法标签。'
     'reported 保留该数据集对应单元格的均值、±标准差和百分号，例如 82.3 ±0.6%。'
     '若单元格另附括号内的层数等元数据，额外给出解释括号含义的论文原文 annotation_quote，reported 不包含该元数据。'
@@ -73,6 +73,28 @@ def validate_target_evidence(spec,paper):
 
 def bind_targets(spec,paper):
     result=dict(spec)
+    # Models sometimes quote a table caption instead of the immediately
+    # following column header. Recover only a unique literal header in that
+    # same local table; validation still checks every column and result cell.
+    evidence=[]
+    lines=paper.splitlines()
+    for original in result.get('target_evidence') or []:
+        row=dict(original)
+        header=str(row.get('header_quote') or '')
+        keys=[_key(x) for x in row.get('columns', [])]
+        if keys and any(key not in _key(header) for key in keys) and re.match(r'\s*Table\s+\d+',header,re.I):
+            candidates=[]
+            for i,line in enumerate(lines):
+                if _compact(line)!=_compact(header):continue
+                following=lines[i+1:i+21]
+                if not any(_compact(value)==_compact(row.get('row_quote','')) for value in following):continue
+                for value in following:
+                    if not re.match(r'\s*(?:Method|Model|Approach|Dataset)\b',value,re.I):continue
+                    positions=[_key(value).find(key) for key in keys]
+                    if min(positions)>=0 and positions==sorted(positions):candidates.append(value)
+            if len(set(candidates))==1:row['header_quote']=candidates[0]
+        evidence.append(row)
+    result['target_evidence']=evidence
     targets,validation=validate_target_evidence(result,paper)
     if result.get('target_results') and not result.get('unverified_target_results'):
         result['unverified_target_results']=result['target_results']

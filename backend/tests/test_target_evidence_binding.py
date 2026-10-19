@@ -43,3 +43,15 @@ def test_parenthetical_layer_counts_need_caption_evidence_and_variant_is_distinc
     assert not explicit_table_targets(spec,table)['target_results']
     paper='The number in parentheses corresponds to the number of layers of the model.\n'+table
     assert explicit_table_targets(spec,paper)['target_results']=={'DatasetA':{'accuracy':.855}}
+
+
+def test_caption_is_replaced_only_by_unique_literal_header_in_same_table():
+    row=evidence();caption='Table 2: Summary of classification accuracy.'
+    row={**row,'header_quote':caption}
+    paper=caption+'\nMethod DatasetA DatasetB DatasetC\n'+row['row_quote']
+    spec={'model_name':'MethodX','datasets':['DatasetA'],'metrics':['Accuracy'],'target_evidence':[row]}
+    result=bind_targets(spec,paper)
+    assert result['target_results']=={'DatasetA':{'accuracy':.823}}
+    assert result['target_validation']['evidence'][0]['header_quote']=='Method DatasetA DatasetB DatasetC'
+    assert not bind_targets(spec,paper.replace('DatasetA DatasetB DatasetC','DatasetC DatasetB DatasetA'))['target_results']
+    assert not bind_targets(spec,paper.replace(row['row_quote'],'unrelated row'))['target_results']

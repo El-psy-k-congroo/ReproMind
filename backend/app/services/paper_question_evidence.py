@@ -4,6 +4,8 @@ import re
 import unicodedata
 
 TOPICS = [
+    (('邻接', '归一化', '自环', 'adjacency', 'normalization', 'self-loop'),
+     ('adjacency', 'normalization', 'renormalization', 'self-connections', 'propagation rule')),
     (('方法', '原理', '机制', 'method'), ('method', 'approach', 'algorithm', 'framework')),
     (('分类', 'classifier', 'head'), ('classification head', 'classifier', 'logistic regression')),
     (('对比', '句对', 'contrastive', 'siamese'), ('contrastive', 'siamese', 'pairs', 'positive', 'negative')),
