@@ -467,11 +467,25 @@ async def _source_read_answer(db: AsyncSession, project: Project, run_id: str, q
     if "在哪" in question or "在哪里" in question:
         names = "、".join(path.relative_to(source).as_posix() for path in files[:12])
         return draft_note + f"当前复现源码位于 `{source}`。主要模型实现文件是 `{relative}`；实际文件包括：{names}。"
-    body = _redact(chosen.read_text(encoding="utf-8", errors="replace"))
-    clipped = body[:18_000]
-    suffix = f"\n\n文件共 {len(body)} 字符；这里只展示前 18000 字符。" if len(body) > len(clipped) else ""
-    return (draft_note + f"已从当前项目工作区读取 `{relative}`（{len(body)} 字符）。下面是文件原文，未运行或修改代码：\n\n"
-            f"```python\n{clipped.replace('```', '` ` `')}\n```{suffix}")
+    selected = sorted(named, key=lambda path: lowered.find(path.name.lower())) if named else [chosen]
+    parts = [draft_note + "已从当前项目工作区读取以下文件原文，未运行或修改代码；L 为原文件行号。"]
+    remaining = 18_000
+    for path in selected[:4]:
+        body = _redact(path.read_text(encoding="utf-8", errors="replace"))
+        numbered = [f'L{i}: {line}' for i, line in enumerate(body.splitlines(), 1)]
+        shown = []
+        for line in numbered:
+            if len(line) + 1 > remaining: break
+            shown.append(line)
+            remaining -= len(line) + 1
+        relative = path.relative_to(source).as_posix()
+        excerpt = '\n'.join(shown).replace('```', '` ` `')
+        parts.append(f"`{relative}`（{len(body)} 字符）：\n\n```python\n{excerpt}\n```")
+        if len(shown) < len(numbered):
+            parts.append(f"该文件共 {len(numbered)} 行；本次展示前 {len(shown)} 行，剩余内容未展示。")
+    if len(selected) > 4:
+        parts.append(f'本次最多展示 4 个文件，另有 {len(selected)-4} 个匹配文件未展示。')
+    return '\n\n'.join(parts)
 
 
 def _matching_excerpts(text: str, terms: list[str], *, limit: int = 3) -> list[str]:

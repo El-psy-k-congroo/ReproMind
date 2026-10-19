@@ -382,3 +382,17 @@ def test_preflight_syntax_agent_only_patches_broken_entrypoint(tmp_path: Path, m
     assert records[0]["applied"] is True
     assert "def train():" in entry.read_text(encoding="utf-8")
     assert "def unused(:" in (source / "unused.py").read_text(encoding="utf-8")
+
+
+def test_source_reader_includes_each_requested_file_and_actual_line_numbers(tmp_path, monkeypatch):
+    source=tmp_path/'sources'/'repo';source.mkdir(parents=True)
+    (source/'train.py').write_text("import utils\nprint('train')\n",encoding='utf-8')
+    (source/'utils.py').write_text('def normalize():\n    return 1\n',encoding='utf-8')
+    monkeypatch.setattr('app.api.copilot._safe_workspace',lambda _:tmp_path)
+    class Session:
+        async def scalar(self,_):
+            return SimpleNamespace(execution_command={'pythonpath':str(source)},code_spec={})
+    answer=asyncio.run(_source_read_answer(Session(),SimpleNamespace(id='project-1'),'run-1',
+        '展示 train.py 和 utils.py 的源码和行号'))
+    assert '`train.py`' in answer and '`utils.py`' in answer
+    assert 'L2: print' in answer and 'L2:     return 1' in answer
