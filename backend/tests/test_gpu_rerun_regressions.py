@@ -204,3 +204,13 @@ def test_cpu_rerun_and_revision_keep_host_gpu_absence_as_fact(tmp_path, monkeypa
     monkeypatch.setattr(copilot,'inspect_run_readiness',unavailable)
     inherited=asyncio.run(copilot._rerun_action_plan(Session(),SimpleNamespace(id='project-a'),question,'run-a'))
     assert inherited['gpu_requested']  # Do not silently weaken an approved GPU-only run.
+
+
+@pytest.mark.parametrize('question', [
+    '请仅用 CPU 重新运行当前修改后的实验，保留现有参数。',
+    '请重新跑修复后的模型，结果另存。',
+    '重新运行已经修改过的代码，保持其他设置。',
+])
+def test_reference_to_modified_source_does_not_request_another_edit(question):
+    assert not copilot._code_action_requested(question)
+    assert copilot._rerun_requested(question)

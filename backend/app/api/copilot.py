@@ -1241,6 +1241,8 @@ def _code_action_requested(question: str) -> bool:
             return True
         for verb in re.finditer(verbs, clause):
             before, after = clause[:verb.start()], clause[verb.end():]
+            if re.match(r'(?:后的|过的|完的|完成后的)', after):
+                continue  # A modified/fixed experiment is a noun reference, not a new edit request.
             if re.search(r'(?:已经|已|刚刚|之前|此前).{0,10}$', before) and not re.search(r'继续\s*$', before):
                 continue
             if re.match(r'.{0,6}(?:已经|已)(?:经)?(?:应用|保存|完成|通过)', after):
