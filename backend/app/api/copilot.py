@@ -158,6 +158,8 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     def rows(values, fields, count=12):
         return [{key: row[key] for key in fields if key in row} for row in values[:count] if isinstance(row, dict)]
     plans = context.get('proposed_tuning_plans_not_executed') or job.get('tuning_plans') or []
+    wants_search = bool(re.search(r'调参|搜索|候选|参数范围|参数空间|\btun(?:e|ing)\b|\bsearch\b|\btrials?\b',question,re.I))
+    if not wants_search:plans=[]
     named = [plan for plan in plans if str(plan.get('dataset', '')).lower() in question.lower()]
     plans = named or plans
     facts = {
@@ -258,9 +260,19 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
         candidate['project_evidence'].pop('gpu_readiness', None)
     if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
         candidate['source_loss_definitions_not_execution_proof'] = []
+    # Reduce optional source excerpts before discarding current run facts.
+    # Parameters + provenance + final rows can otherwise vanish together when
+    # a question happens to retrieve a large implementation or search plan.
+    if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
+        source=candidate.get('selected_source_evidence_not_execution_proof')
+        for fraction in (.35,.2,.1,0):
+            candidate['selected_source_evidence_not_execution_proof']=whole_source_packets(source,int(limit*fraction))
+            if len(json.dumps(candidate,ensure_ascii=False,default=str))<=limit:break
     if len(json.dumps(candidate, ensure_ascii=False, default=str)) > limit:
         candidate['verified_run_facts'] = {key: facts[key] for key in
-            ['run_id', 'status', 'dataset_results_count', 'tuning_attempts_total']}
+            ['run_id', 'status', 'stage', 'dataset_results_count', 'tuning_attempts_total',
+             'paper_parameters_not_runtime','current_source_evidence','dataset_download_plans_not_download_proof',
+             'current_local_dataset_evidence','dataset_results']}
         candidate['evidence_budget']['facts_omitted'] = True
     # Reserved exact-source slots used to bypass every limit above. Keep whole
     # packets with explicit omissions rather than silently sending oversized JSON.
@@ -1181,7 +1193,7 @@ def _workspace_context(context, job, workspace, question, terms,
         if excerpts:
             relevant_code.append({"file": str(path.relative_to(_native_path(workspace))), "excerpts": excerpts})
     context["source_relevant_excerpts"] = relevant_code
-    if asks_parameters:
+    if asks_parameters and re.search(r'调参|搜索|候选|参数范围|参数空间|\btun(?:e|ing)\b|\bsearch\b',question,re.I):
         context['proposed_tuning_plans_not_executed'] = build_tuning_plans(job)
     source_path = str((job.execution_command or {}).get("pythonpath") or "")
     if source_path and (asks_data or asks_results or asks_parameters):

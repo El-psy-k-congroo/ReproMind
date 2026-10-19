@@ -80,11 +80,15 @@ def test_status_shortcut_does_not_swallow_parameter_and_paper_questions():
 
 def test_data_source_and_scoped_parameters_survive_large_source_context():
     context={'job':{'run_id':'current','status':'awaiting_approval','stage':'awaiting_approval',
+        'dataset_results_count':4,'dataset_results':[{'dataset':str(i),'metrics':{'accuracy':.8},
+            'baseline_parameters':{'width':64},'baseline_argv':['python','train.py']+['long-arg']*40} for i in range(4)],
         'paper_spec':{'hyperparameters':[{'name':'width','value':16,'dataset':'first'},
                                        {'name':'width','value':64,'datasets':['second']}]},
         'dataset_spec':{'download_requests':[{'dataset':'second','url':'https://example.org/data.tar.gz',
                                              'source':'author_repository_documentation'}]}},
         'current_source_evidence':{'ready':True,'repository_url':'https://github.com/author/repo'},
+        'proposed_tuning_plans_not_executed':[{'dataset':'second','space':[{'parameter':'width','values':list(range(50))}],
+            'trials':[{'width':i} for i in range(100)]}]*4,
         'source_task_evidence':{'named_implementations':[{'file':'model.py','code':'x'*1100}]*30},
         'source_readme_excerpt':'old clone failed\n'+'Unrelated text '*1000}
     prompt=json.loads(_bounded_prompt('不同数据集参数和下载来源是什么，目前到哪一步？',context,[],''))
@@ -93,3 +97,5 @@ def test_data_source_and_scoped_parameters_survive_large_source_context():
     assert facts['dataset_download_plans_not_download_proof'][0]['url']=='https://example.org/data.tar.gz'
     assert facts['paper_parameters_not_runtime'][0]['dataset']=='first'
     assert facts['paper_parameters_not_runtime'][1]['datasets']==['second']
+    assert not facts.get('tuning_plans_not_executed')
+    assert len(json.dumps(prompt,ensure_ascii=False))<=15000
