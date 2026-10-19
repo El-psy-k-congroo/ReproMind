@@ -27,7 +27,7 @@ from ..models import ReproductionJob, ReproductionStatus
 from ..services.reproduction_engine import (
     _environment_python, _named_environment_prefix, _environment_owned_by_job, _align_dataset_commands,
     _hardware_plan, _infer_python_dependencies, _execution_command,
-    _native_path, _repository_manifest,
+    _native_path, _repository_manifest, _goal_requires_gpu,
     execute_reproduction, has_active_work,
 )
 from .models_catalog import validate_model
@@ -491,7 +491,7 @@ async def preview_branch(project_id: str, job_id: str, payload: BranchPreviewReq
         _code_file(source, payload.file)
     if payload.model_id:
         await validate_model(payload.model_id)
-    gpu = any(term in payload.instruction.lower() for term in ("gpu", "cuda", "显卡"))
+    gpu = _goal_requires_gpu(payload.instruction)
     readiness = await inspect_run_readiness(job) if gpu else {}
     # Structured preparation action, not a GCN/command template. Only exact,
     # reviewed TF import transformations bypass generation; complex requests
@@ -679,7 +679,7 @@ async def apply_revision(project_id: str, job_id: str, payload: BranchConfirmReq
     target_framework = requested_framework(str(proposal.get('instruction') or ''))
     if target_framework and source_framework(source_bodies(source, updated)) != target_framework:
         raise HTTPException(status_code=422, detail=f'提案未完成 {target_framework} 框架迁移；未写入任何源码。请重新生成多文件提案。')
-    if any(term in str(proposal.get('instruction') or '').lower() for term in ('gpu', 'cuda', '显卡')):
+    if _goal_requires_gpu(str(proposal.get('instruction') or '')):
         issues = _gpu_preview_issues(source, updated,(base.code_spec or {}).get('entrypoints'))
         if issues:
             raise HTTPException(status_code=422, detail='GPU 提案未通过当前源码校验，未写入任何源码：' + '；'.join(issues))
@@ -786,8 +786,7 @@ async def revision_run_plan(project_id: str, job_id: str, proposal_id: str,
 
 async def inspect_revision_plan(base, source, proposal, proposal_id):
     result = {'proposal_id': proposal_id, 'action': 'blocked', 'reason': '',
-              'gpu_requested': any(term in str(proposal.get('instruction') or '').lower()
-                                   for term in ('gpu', 'cuda', '显卡'))
+              'gpu_requested': _goal_requires_gpu(str(proposal.get('instruction') or ''))
                                    or bool((getattr(base, 'environment_spec', {}) or {}).get('gpu_requested')),
               **revision_scope(base, proposal)}
     if proposal.get('base_run_id') != base.id or not proposal.get('applied_at'):
@@ -837,8 +836,7 @@ async def _run_revision_once(project_id, job_id, payload, background_tasks, db):
     selected_entries=(base.execution_command or {}).get('entrypoint_candidates',[])[:1]
     environment["hardware_plan"] = _hardware_plan(source,selected_entries)
     environment["inferred_dependencies"] = _infer_python_dependencies(source,selected_entries)
-    environment["gpu_requested"] = any(term in str(proposal.get("instruction") or "").lower()
-                                       for term in ("gpu", "cuda", "显卡")) or bool(environment.get('gpu_requested'))
+    environment["gpu_requested"] = _goal_requires_gpu(str(proposal.get("instruction") or "")) or bool(environment.get('gpu_requested'))
     if environment['gpu_requested']:
         await _approve_gpu_environment(base, environment, payload.gpu_environment_migration)
     run_source = source

@@ -186,3 +186,21 @@ def test_tf_gpu_enumerated_but_compute_fails_blocks_training(tmp_path, monkeypat
     monkeypatch.setattr(engine, 'probe_framework', probe)
     with pytest.raises(RuntimeError, match='MatMul'):
         asyncio.run(engine._prepare_tensorflow_gpu(None, None, tmp_path, tmp_path / 'python.exe', {}))
+
+
+def test_cpu_rerun_and_revision_keep_host_gpu_absence_as_fact(tmp_path, monkeypatch):
+    base=SimpleNamespace(id='run-a',status=SimpleNamespace(value='completed'),result_json={},environment_spec={},
+        execution_command={'commands':[{'dataset':'DatasetA'}]})
+    class Session:
+        async def scalar(self,_): return base
+    question='当前服务器无 GPU，请在 CPU 上重新运行 DatasetA'
+    plan=asyncio.run(copilot._rerun_action_plan(Session(),SimpleNamespace(id='project-a'),question,'run-a'))
+    assert plan['kind']=='rerun_confirm' and not plan['gpu_requested']
+    proposal={'instruction':'无 GPU，请修改 CPU 实验的学习率','base_run_id':'run-a'}
+    revision=asyncio.run(branches.inspect_revision_plan(base,tmp_path,proposal,'proposal-a'))
+    assert not revision['gpu_requested']
+    base.environment_spec={'gpu_requested':True}
+    async def unavailable(_): return {}
+    monkeypatch.setattr(copilot,'inspect_run_readiness',unavailable)
+    inherited=asyncio.run(copilot._rerun_action_plan(Session(),SimpleNamespace(id='project-a'),question,'run-a'))
+    assert inherited['gpu_requested']  # Do not silently weaken an approved GPU-only run.

@@ -31,7 +31,7 @@ from ..services.dataset_discovery import inspect_local_datasets
 from ..services.telemetry import read_job_telemetry
 from ..services.runtime_evidence import execution_logs, device_log_evidence
 from ..services.tuning import build_tuning_plans
-from ..services.reproduction_engine import _native_path
+from ..services.reproduction_engine import _native_path, _goal_requires_gpu
 from ..services.source_selection import entry_sources
 from ..services.task_context import ranked_source_files, task_contract, rank_entries, question_entrypoints
 from ..services.performance_evidence import performance_question, comparison_evidence, comparison_facts_answer, render_hypotheses
@@ -1345,7 +1345,7 @@ async def _rerun_action_plan(db: AsyncSession, project: Project, run_id: str, qu
         datasets if len(datasets) == 1 and not matches else [])
     dataset = "、".join(selected)
     # A new run must not silently weaken the selected run's GPU-only requirement.
-    gpu = (any(term in lowered for term in ("gpu", "cuda", "显卡"))
+    gpu = (_goal_requires_gpu(question)
            or bool((job.environment_spec or {}).get("gpu_requested")))
     plan = {"kind": "unavailable", "run_id": job.id, "dataset": dataset, "instruction": question,
             "selected_datasets": selected,
