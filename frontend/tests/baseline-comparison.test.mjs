@@ -16,5 +16,6 @@ test('tuned scores cannot replace baseline acceptance and functional checks have
   assert.equal(baselineComparison({ return_code: 0, verdict: 'tuned_result', tuning_selected: true }), null)
   assert.equal(baselineComparison({ return_code: 0, verdict: 'tuned_result', tuning_selected: true, baseline_verdict: 'deviated' }), 'deviated')
   assert.equal(baselineComparison({ return_code: 0, verdict: 'matched', comparison_scope: 'functional_check' }), null)
+  assert.equal(baselineComparison({ return_code: 0, verdict: 'matched', comparison_scope: 'modified_configuration' }), null)
   assert.equal(baselineComparison({ return_code: 1, verdict: 'matched' }), null)
 })

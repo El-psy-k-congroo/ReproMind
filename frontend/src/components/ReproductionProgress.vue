@@ -308,7 +308,7 @@ const displayedError = computed(() => {
           <div class="experiment-card-title"><strong>{{ item.dataset }}</strong><span>{{ item.verdict === 'matched' ? '✓ 指标在容差内' : item.verdict === 'result_produced' ? '△ 已产生指标，目标待核' : item.verdict === 'metric_missing' ? '△ 缺少指标' : item.verdict === 'deviated' ? '△ 指标超出容差' : item.verdict === 'tuned_result' ? '△ 调参结果，非原配置' : item.verdict === 'configuration_unverified' ? '△ 配置待核' : item.verdict === 'dataset_version_unverified' ? '△ 版本待核' : item.return_code === 0 ? '△ 待核验' : '✗ 未完成' }}</span></div>
           <div class="experiment-value">{{ metricValue(item.metrics[item.metric_key || 'accuracy'], item.metric_key || 'accuracy') }}</div>
           <small>{{ metricLabel(item.metric_key || 'accuracy') }} · 论文 {{ metricValue(item.target, item.metric_key || 'accuracy') }} · 差值 {{ item.delta === null ? '—' : item.delta.toFixed(4) }}</small>
-          <small v-if="item.comparison_scope === 'functional_check'">{{ item.comparison_basis }}</small>
+          <small v-if="['functional_check', 'modified_configuration'].includes(item.comparison_scope || '')">{{ item.comparison_basis }}</small>
           <small v-if="item.process_exit_code === 0 && item.return_code !== 0">进程退出码为 0，但日志报告了明确运行异常，按运行失败记录；原始退出码和日志均保留。</small>
           <p v-if="item.diagnosis.suggestion">{{ item.diagnosis.suggestion }}</p>
         </article>

@@ -1850,7 +1850,7 @@ async def stream_answer(
                 "历史 assistant 回答可能错误，不能用其替代当前 verified_run_facts；只根据当前证据纠正历史错误。"
                 "dataset_result_rows_complete=false 只表示上下文截短，不表示未运行或指标不存在。"
                 "复现结论必须逐项读取当前 dataset_results 的 metrics/verdict；不要重复历史回答中的缺失结论。"
-                "comparison_scope=functional_check表示本轮仅功能运行，论文指标仅参考，不能作性能失败或达标判定。"
+                "comparison_scope=functional_check表示本轮仅功能运行，modified_configuration表示参数已不同于论文配置；两者论文指标仅参考，不能作作者原配置失败或达标判定。"
                 "tuning_attempts_total=0 只表示尚无已完成尝试；若 tuning_active 存在，则当前试次正在执行，不能说尚未调参或只是待批准建议。"
                 "tuning_active 的 trial 和 parameters 是正在执行的配置，不是 proposed_tuning_plans_not_executed；未结束前不能宣布选中结果。"
                 "不得引用别的实验或历史对话中的搜索次数和最佳值。对用户用参数、文件和日志说明依据，不输出内部 JSON 协议字段名。"

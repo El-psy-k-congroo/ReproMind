@@ -248,7 +248,7 @@ watch(selectedDataset, chooseDefaultAttempt)
           <p v-if="result.baseline_metrics && Object.keys(result.baseline_metrics).length">原配置基线：<span v-for="(value, key) in result.baseline_metrics" :key="key">{{ metricNames[String(key)] || key }} {{ number(value, String(key)) }}； </span></p>
           <p v-if="Object.keys(selectedTuningMetrics(run.result_json, result.dataset)).length">额外调参已完成；原配置基线保留，新增调参后的测试结果。</p>
           <p v-else-if="result.tuning_note">{{ result.tuning_note.includes('调参未获批准') ? '仅未批准额外搜索，不影响已完成的基线；可在下方审查恢复调参计划。' : result.tuning_note }}</p>
-          <p v-if="result.comparison_scope === 'functional_check'">{{ result.comparison_basis }}。本次结果柱形属于功能运行。</p>
+          <p v-if="['functional_check', 'modified_configuration'].includes(result.comparison_scope || '')">{{ result.comparison_basis }}。</p>
           <div class="comparison-metrics">
             <article v-for="metric in comparisonMetrics(result)" :key="metric.key" class="comparison-metric">
               <strong>{{ metricNames[metric.key] || metric.key.toUpperCase() }}</strong>

@@ -4097,6 +4097,11 @@ def _claim_results(
     for item in dataset_results:
         dataset = str(item["dataset"])
         metric_key = str(item.get("metric_key") or "accuracy")
+        if item.get('comparison_scope') == 'modified_configuration':
+            claims.append({'claim':f'{dataset} 修改配置实验', 'dataset':dataset, 'scope':'modified_configuration',
+                'supported':False, 'status':'failed' if item.get('return_code') else 'configuration_modified',
+                'evidence':str(item.get('comparison_basis') or '') + '；参数差异：' + str(item.get('parameter_differences') or [])})
+            continue
         if item.get('comparison_scope') == 'functional_check':
             actual = (item.get('metrics') or {}).get(metric_key)
             claims.append({
@@ -4192,6 +4197,8 @@ def _write_reproduction_report(job: ReproductionJob, workspace: Path) -> Path:
             )
     else:
         lines.append("| - | - | - | - | - | - | 未产生实验结果 |")
+    if any(item.get('comparison_scope') == 'modified_configuration' for item in dataset_results):
+        lines.extend(['', '本轮包含修改后的实验配置。论文指标仅作参考，不能将本轮结果称为作者原配置复现。'])
     if any(item.get('comparison_scope') == 'functional_check' for item in dataset_results):
         lines.extend(['', '本轮包含用户明确要求的功能检查。论文数值仅作参考，不据此判断性能达标或触发恢复调参。'])
     lines.extend([
@@ -4651,6 +4658,13 @@ async def execute_reproduction(job_id: str) -> None:
                 except ValueError:
                     row['baseline_parameters'] = {}
                     row['parameter_snapshot_note'] = '参数形式无法静态解析；保留原始命令，不推断默认值'
+                from .performance_scope import parameter_differences, MODIFIED_BASIS
+                differences = parameter_differences(job.paper_spec, row['baseline_parameters'])
+                if differences and not functional:
+                    row.update(comparison_scope='modified_configuration', comparison_basis=MODIFIED_BASIS,
+                               parameter_differences=differences, delta=None)
+                    if row['verdict'] in {'matched', 'deviated', 'result_produced'}:
+                        row['verdict'] = row['baseline_verdict'] = 'result_produced'
                 row['baseline_fingerprint'] = command_fingerprint({'argv': argv},
                     item.get('pythonpath') or command.get('pythonpath') or cwd)
                 dataset_results = [prior for prior in dataset_results if prior.get("dataset") != dataset]
@@ -4679,6 +4693,7 @@ async def execute_reproduction(job_id: str) -> None:
                 item["verdict"] == "matched" for item in dataset_results
             )
             from .performance_scope import comparison_scope
+            modified_configuration = any(row.get('comparison_scope') == 'modified_configuration' for row in dataset_results)
             functional = comparison_scope(job.paper_spec, job.execution_mode) == 'functional_check'
             functional_success = functional and all_executed and metrics_complete and not skipped and not unplanned and all(
                 item['metrics'].get(item['metric_key']) is not None for item in dataset_results
@@ -4741,6 +4756,7 @@ async def execute_reproduction(job_id: str) -> None:
                 "functional_success": functional_success,
                 "reproduction_success": reproduction_success,
                 "conclusion": (
+                    '本轮修改后的配置已运行并产出指标；论文数值仅供参考，不能据此认定作者原配置复现。' if modified_configuration and all_executed and metrics_complete else
                     '本轮按用户要求完成功能运行并产出指标；论文数值仅供参考，尚未检验完整训练协议下的论文性能。' if functional_success else
                     f"本次选择的 {len(dataset_results)} 组数据集基线指标达到设定容差；其他论文主张、消融及跨种子结果未由本次运行验证。" if reproduction_success else
                     f"作者配置基线 {sum(item.get('baseline_verdict', item['verdict']) == 'matched' for item in dataset_results)}/{len(dataset_results)} 组达到指标容差；调参结果另列。未验证不代表论文结论错误。"
@@ -4752,6 +4768,7 @@ async def execute_reproduction(job_id: str) -> None:
                 _write_reproduction_report(job, workspace)
                 message = (
                     "安全试运行完成；这不等于论文指标已复现" if job.execution_mode == "smoke" else
+                    "修改配置实验已完成；论文数值仅作参考" if modified_configuration and metrics_complete else
                     "功能实验完成并产出指标；论文性能尚未验证" if functional_success else
                     "全部计划实验已执行并生成复现报告" if reproduction_success else
                     "实验已完成并产出指标；部分指标偏离当前论文目标" if deviated_rows else

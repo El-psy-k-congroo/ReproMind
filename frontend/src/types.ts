@@ -46,7 +46,7 @@ export interface DatasetResult {
   delta: number | null
   verdict: string
   baseline_verdict?: string
-  comparison_scope?: 'functional_check' | 'paper_baseline'
+  comparison_scope?: 'functional_check' | 'paper_baseline' | 'modified_configuration'
   comparison_basis?: string
   wall_time_seconds?: number
   diagnosis: Record<string, string>

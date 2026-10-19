@@ -21,3 +21,22 @@ def comparison_scope(paper_spec, execution_mode='full'):
 
 
 FUNCTIONAL_BASIS = '用户明确要求功能检查；论文数值仅供参考，不作性能达标判定，也不据此触发恢复调参'
+
+
+def parameter_differences(paper_spec, parameters):
+    """Compare only numeric values with the same recorded parameter identity."""
+    import math
+    actual={str(key).replace('-', '_').casefold():value for key,value in (parameters or {}).items()}
+    changes=[]
+    for row in (paper_spec or {}).get('hyperparameters') or []:
+        if not isinstance(row,dict):continue
+        name=str(row.get('name') or '');key=name.replace('-', '_').casefold()
+        if key not in actual:continue
+        try: expected=float(row['value']);observed=float(actual[key])
+        except (KeyError,TypeError,ValueError):continue
+        if math.isfinite(expected) and math.isfinite(observed) and not math.isclose(expected,observed,rel_tol=1e-9,abs_tol=1e-12):
+            changes.append({'parameter':name,'paper':expected,'actual':observed})
+    return changes
+
+
+MODIFIED_BASIS = '本次配置与已记录的论文参数不同；论文数值仅作参考，不作为作者原配置达标或偏离判定'
