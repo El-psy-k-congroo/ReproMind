@@ -84,6 +84,9 @@ def setup_workflow(tmp_path, monkeypatch, *, text='Author code https://github.co
         goal='复现论文核心实验', approved_at=None, execution_mode='full', paper_spec=spec or {},
         code_spec={}, dataset_spec={}, environment_spec={}, execution_command={}, result_json={},
         error_message='old failure', logs='')
+    if spec:
+        from app.services.paper_protocol import specification_context
+        job.paper_spec={**spec,'spec_context':specification_context(text,job.goal)}
     values = iter([job, None, None])
 
     class Session:
@@ -143,6 +146,19 @@ def test_open_source_without_scope_reaches_approval_and_plans_tf_datasets(tmp_pa
     assert (source / 'train.py').read_bytes() == original
 
 
+def test_expanded_scope_reextracts_datasets_before_planning(tmp_path,monkeypatch):
+    job,source=setup_workflow(tmp_path,monkeypatch,spec={'datasets':['Alpha'],'metrics':['Accuracy']})
+    job.goal='复现全部数据集 Alpha 和 Beta'
+    async def extract(paper,report,model,**kwargs):
+        assert kwargs['goal']==job.goal
+        return {'datasets':['Alpha','Beta'],'metrics':['Accuracy']}
+    monkeypatch.setattr(engine,'_paper_spec',extract)
+    asyncio.run(engine.prepare_reproduction(job.id))
+    assert job.status==ReproductionStatus.awaiting_approval
+    assert [row['dataset'] for row in job.execution_command['commands']]==['Alpha','Beta']
+    assert job.paper_spec['acceptance_policy']['mode']=='practical'
+
+
 def test_author_source_is_available_before_simple_metadata_extraction(tmp_path, monkeypatch):
     job, source = setup_workflow(tmp_path, monkeypatch)
 
@@ -163,6 +179,8 @@ def test_rejected_author_plan_survives_transaction_rollback(tmp_path,monkeypatch
     import copy
     job,source=setup_workflow(tmp_path,monkeypatch,spec={'datasets':['Alpha'],'metrics':['Accuracy']})
     job.goal='Alpha 完整训练，seed=42'
+    from app.services.paper_protocol import specification_context
+    job.paper_spec['spec_context']=specification_context(job.project.artifacts[0].content_text,job.goal)
     session_class=engine.AsyncSessionLocal
     saved={}
     class Session(session_class):
@@ -235,11 +253,14 @@ def test_open_source_spec_ignores_generated_code_scope_but_requires_actual_targe
         calls.append(json.loads(prompt))
         assert '不要求 reproduction_scope' in system
         return SimpleNamespace(data={'datasets': ['Alpha'], 'metrics': ['Accuracy'],
+                                     'acceptance_policy': {'mode':'practical','ratio_tolerance':1},
+                                     'spec_context': {'goal':'fabricated'},
                                      'reproduction_scope': {'required': [{'paper_evidence': 'wrong'}]}},
                                error='', usage={})
     monkeypatch.setattr(engine, 'get_model_router', lambda: SimpleNamespace(complete_json=complete_json))
     result = asyncio.run(engine._paper_spec('paper', {}, require_scope=False, source_evidence={'files': {'README': 'Alpha'}}))
     assert len(calls) == 1 and 'reproduction_scope' not in result
+    assert 'acceptance_policy' not in result and 'spec_context' not in result
     assert result['spec_validation']['scope'] == 'author_source_workflow'
 
 

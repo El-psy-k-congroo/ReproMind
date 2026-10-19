@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     dataset_max_extract_bytes: int = Field(default=50_000_000_000, ge=1)
     dataset_max_archive_files: int = Field(default=250_000, ge=1)
     reproduction_use_system_proxy: bool = True
+    reproduction_comparison_mode: Literal["practical", "strict"] = "practical"
+    reproduction_ratio_tolerance: float = Field(default=0.01, ge=0, le=0.1)
+    reproduction_relative_tolerance: float = Field(default=0.05, ge=0, le=0.5)
     experiment_timeout_seconds: int = 43200  # Full multi-fold training may take hours.
     reproduction_log_chars: int = 60_000
     pip_index_url: str = ""  # Empty preserves pip configuration / environment.

@@ -85,11 +85,12 @@ def test_dependency_files_have_a_separate_syntax_contract():
     with pytest.raises(ValueError): validate_requirements('torch => 1\n')
 
 
-def test_no_silent_three_percentage_point_success_margin():
-    spec={'datasets':['Cora'],'metrics':['Accuracy'],'target_results_raw':{'accuracy':'85.5 ± 0.5'}}
+def test_strict_comparison_retains_only_paper_uncertainty():
+    spec={'datasets':['Cora'],'metrics':['Accuracy'],'target_results_raw':{'accuracy':'85.5 ± 0.5'},
+          'acceptance_policy':{'mode':'strict'}}
     assert target_tolerance(spec,'Cora','accuracy')[0] == .005
     assert target_tolerance({**spec,'target_results_raw':{'Cora':'85.5 ± 0.5'}},'Cora','accuracy')[0] == .005
-    assert target_tolerance({},'Data','accuracy')[0] == 0
+    assert target_tolerance({'acceptance_policy':{'mode':'strict'}},'Data','accuracy')[0] == 0
     assert .849 < .855 - target_tolerance(spec,'Cora','accuracy')[0]
 
 

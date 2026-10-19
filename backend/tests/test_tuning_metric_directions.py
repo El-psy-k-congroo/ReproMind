@@ -29,6 +29,6 @@ def test_small_explicit_percent_and_non_ratio_targets_retain_their_units():
     assert metric_number('32.7%', 'prd') == 32.7
     assert _target_for_dataset({'target_results': {'Example': {'cr': 47.073}}}, 'Example', 'cr') == 47.073
     assert _target_for_dataset({'target_results': {'Example': {'prd': 32.739}}}, 'Example', 'prd') == 32.739
-    tolerance, _ = target_tolerance({'datasets':['Example'], 'metrics':['Top-1 Error'],
+    tolerance, _ = target_tolerance({'datasets':['Example'], 'metrics':['Top-1 Error'], 'acceptance_policy':{'mode':'strict'},
                                    'target_results':{'Example':{'top1error':'0.5% ±0.05%'}}}, 'Example','top1error')
     assert tolerance == .0005

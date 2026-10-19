@@ -52,6 +52,8 @@ Ubuntu 22.04 系统 Python 3.10 不满足要求，应单独安装 3.11 / 3.12，
 
 Conda 项目环境位于 `/var/lib/repromind/environments/`，包缓存与运行缓存位于项目内。服务器一次调度一个外部执行进程，避免并发安装与实验抢占内存；本地调度行为保持不变。安装包仍需联网。用户上传的数据与项目文件均需定期备份；系统不保证任意第三方代码都能在资源有限的服务器成功复现。
 
+数值比较默认使用 `REPRODUCTION_COMPARISON_MODE=practical`：准确率等比例指标允许 `REPRODUCTION_RATIO_TOLERANCE=0.01`（1 个百分点），其他指标允许 `REPRODUCTION_RELATIVE_TOLERANCE=0.05`（目标值的 5%）。论文报告的不确定性更大时取较宽者；页面和报告同时显示实际分数、差值和判定依据。可设置 `strict` 仅使用论文报告的不确定性。任务准备时保存策略，不改写历史结果；数值达标只覆盖本次选择的实验范围，不代表全部论文主张已验证。Windows 与 Linux 使用相同配置项。
+
 ## HTTPS 与运维
 
 替换 deploy/nginx.conf 的 SERVER_IP。HTTPS 静态页面公开，业务 API 在应用层校验会话和归属。SSE 禁用缓冲、读取超时 300 秒；上传上限与后端一致。80 端口仅提供证书挑战与 HTTPS 跳转。
