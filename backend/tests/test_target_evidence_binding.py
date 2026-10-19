@@ -55,3 +55,18 @@ def test_caption_is_replaced_only_by_unique_literal_header_in_same_table():
     assert result['target_validation']['evidence'][0]['header_quote']=='Method DatasetA DatasetB DatasetC'
     assert not bind_targets(spec,paper.replace('DatasetA DatasetB DatasetC','DatasetC DatasetB DatasetA'))['target_results']
     assert not bind_targets(spec,paper.replace(row['row_quote'],'unrelated row'))['target_results']
+
+
+def test_result_row_mistaken_for_header_recovers_literal_column_order():
+    row=evidence();row={**row,'header_quote':row['row_quote']}
+    paper='Method DatasetA DatasetB DatasetC\n'+row['row_quote']
+    spec={'model_name':'MethodX','datasets':['DatasetA'],'metrics':['Accuracy'],'target_evidence':[row]}
+    assert bind_targets(spec,paper)['target_results']=={'DatasetA':{'accuracy':.823}}
+    assert not bind_targets(spec,paper.replace('DatasetA DatasetB DatasetC','DatasetC DatasetB DatasetA'))['target_results']
+
+
+def test_plain_author_row_is_not_confused_with_named_random_split_variant():
+    paper='Method DatasetA DatasetB\nMethodX (this paper) 82.3 (7s) 71.8 (12s)\nMethodX (rand. splits) 80.0 ±0.5 69.0 ±0.7'
+    spec={'model_name':'MethodX','datasets':['DatasetA','DatasetB'],'metrics':['Accuracy']}
+    assert explicit_table_targets(spec,paper)['target_results']=={
+        'DatasetA':{'accuracy':.823},'DatasetB':{'accuracy':.718}}

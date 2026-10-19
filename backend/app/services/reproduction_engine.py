@@ -1605,6 +1605,7 @@ async def _dataset_spec(
     )
     repository_urls = extract_repository_urls(readme_text)
     linked_readmes: list[str] = []
+    linked_repository_errors: list[str] = []
     linked_dataset_files: dict[str, list[dict[str, str]]] = {}
     if repository_urls and any(not local_evidence.get(label, {}).get("ready") for label in requested):
         async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
@@ -1637,18 +1638,12 @@ async def _dataset_spec(
                                     "filename": Path(relative).name,
                                     "url": f"https://raw.githubusercontent.com/{owner}/{repository}/{branch}/{relative}",
                                 })
-                except (httpx.HTTPError, ValueError, KeyError):
-                    pass
-                for branch in ("master", "main"):
-                    try:
-                        response = await client.get(
-                            f"https://raw.githubusercontent.com/{owner}/{repository}/{branch}/README.md"
-                        )
-                        if response.status_code == 200:
-                            linked_readmes.append(response.text[:60_000])
-                            break
-                    except httpx.HTTPError:
-                        continue
+                except (httpx.HTTPError, ValueError, KeyError) as exc:
+                    linked_repository_errors.append(f'{repository_url}: {type(exc).__name__}: {str(exc)[:200]}')
+                from .author_documentation import linked_readme
+                text, errors = await linked_readme(client,owner,repository)
+                if text:linked_readmes.append(text)
+                linked_repository_errors.extend(errors)
 
     all_readmes = f"{readme_text}\n" + "\n".join(linked_readmes)
     from .dataset_discovery import shared_data_archive
@@ -1786,6 +1781,7 @@ async def _dataset_spec(
         "local_dataset_evidence": local_evidence,
         "dataset_source_candidates": source_candidates,
         "public_search_errors": public_search_errors,
+        "linked_repository_errors": linked_repository_errors,
         "dataset_diagnostics": diagnostics,
         "available_datasets": available,
         'repository_managed_downloads': verified_managed,
@@ -2214,6 +2210,9 @@ async def prepare_reproduction(job_id: str) -> None:
                     key: int(prior_usage.get(key, 0)) + int(usage.get(key, 0))
                     for key in set(prior_usage) | set(usage)
                 }}
+            if not job.paper_spec.get('target_results'):
+                from .paper_target_evidence import explicit_table_targets
+                job.paper_spec = explicit_table_targets(job.paper_spec,paper_text)
             model_name = _model_name(job.project, job.paper_spec)
             from .metric_contract import acceptance_policy
             job.paper_spec = {**job.paper_spec, 'user_goal': goal,

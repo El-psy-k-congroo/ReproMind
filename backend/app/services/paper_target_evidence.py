@@ -93,6 +93,19 @@ def bind_targets(spec,paper):
                     positions=[_key(value).find(key) for key in keys]
                     if min(positions)>=0 and positions==sorted(positions):candidates.append(value)
             if len(set(candidates))==1:row['header_quote']=candidates[0]
+        elif keys and any(key not in _key(header) for key in keys):
+            # A model may accidentally repeat the result row as its header.
+            # Recover only from the nearest literal labelled header above that
+            # exact row, never infer a column order from dataset request order.
+            candidates=[]
+            for i,line in enumerate(lines):
+                if _compact(line)!=_compact(row.get('row_quote','')):continue
+                for value in reversed(lines[max(0,i-20):i]):
+                    if not re.match(r'\s*(?:Method|Model|Approach|Dataset)\b',value,re.I):continue
+                    positions=[_key(value).find(key) for key in keys]
+                    if min(positions)>=0 and positions==sorted(positions):candidates.append(value)
+                    break
+            if len(set(candidates))==1:row['header_quote']=candidates[0]
         evidence.append(row)
     result['target_evidence']=evidence
     targets,validation=validate_target_evidence(result,paper)
@@ -129,6 +142,9 @@ def explicit_table_targets(spec,paper):
     for i,line in enumerate(lines):
         if not re.search(r'(?<![\w])'+re.escape(model)+r'(?![\w*+])',line,re.I):continue
         match=re.search(re.escape(model),line,re.I);tail=line[match.end():]
+        first=CELL.search(tail)
+        descriptor=tail[:first.start()].strip(' :|\t') if first else ''
+        if descriptor and not re.fullmatch(r'\(?\s*(?:ours|this paper|proposed)\s*\)?',descriptor,re.I):continue
         context='\n'.join(lines[max(0,i-20):i]);annotation=''
         if re.search(r'parenthes.{0,150}(?:layer|epoch|sample|parameter)',context,re.I|re.S):
             annotation=context
