@@ -1107,7 +1107,20 @@ def _hardware_plan(source: Path, entrypoints=None) -> dict[str, Any]:
 
 
 def _goal_requires_gpu(goal: str) -> bool:
-    return bool(re.search(r'gpu|cuda|显卡',goal,re.I)) and not bool(re.search(r'(?:不要|不用|不使用)\s*(?:gpu|cuda|显卡)',goal,re.I))
+    # A device mentioned in host facts is not a request to require that device.
+    # Evaluate clauses separately so "no local GPU; use the remote GPU" still
+    # retains the positive request, while CPU requests never silently fall back.
+    device = r'(?:gpu|cuda|显卡)'
+    for clause in re.split(r'[，,。；;！!？?\n]', goal.casefold()):
+        if not re.search(device, clause):
+            continue
+        negative = re.search(
+            r'(?:不要|不用|不使用|不需要|无需|没有|无|缺少|不具备|不支持|不可用)\s*(?:可用的?\s*)?'
+            + device + r'|\b(?:no|without|lack(?:s|ing)?|do not (?:use|require)|not (?:using|required?))\s+'
+            + device + r'|' + device + r'\s*(?:不可用|不支持|is (?:not available|unavailable)|unavailable)', clause)
+        if not negative:
+            return True
+    return False
 
 
 def _cpu_device_assignment(text: str) -> bool:

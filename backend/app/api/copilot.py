@@ -1408,7 +1408,8 @@ def _rerun_answer(plan: dict) -> str:
 
 def _gpu_capability_question(question: str) -> bool:
     lowered = question.lower()
-    if _recorded_results_requested(question) or re.search(r'损失|核心方法|模型结构|tokenizer|注意力',lowered):
+    if _recorded_results_requested(question) or re.search(
+            r'损失|核心方法|模型结构|tokenizer|注意力|论文|邻接|归一化|数据划分|超参数|学习率|公式|算法|dropout|algorithm|normalization|hyperparameter', lowered):
         return False
     if _performance_question(question):
         return False  # “性能” contains 能, but is not a GPU availability question.
@@ -1579,7 +1580,7 @@ def _gpu_capability_answer(context: dict) -> str:
                             if migration.get('supported') else
                             '\n\n目前无法自动准备环境迁移：' + str(migration.get('reason') or '需要额外兼容性检查'))
     return (current_execution + f"{verdict}\n\n"
-            f"- 主机：{host}。这只证明机器有显卡，不证明项目环境可用。\n"
+            f"- 主机：{host}。主机检测与项目运行时验证分别记录。\n"
             f"- 当前 Conda 环境：{environment}。\n"
             f"- 当前源码：{code}\n"
             f"- 所选实验 `{str(job.get('run_id') or '')[:8]}`：状态 `{job.get('status', '未知')}`；"

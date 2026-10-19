@@ -194,3 +194,12 @@ def test_performance_context_loads_history_without_live_gpu_probe(tmp_path, monk
     project = SimpleNamespace(id='project',name='custom',description='',artifacts=[])
     context = asyncio.run(copilot._context(Session(),project,'为什么GPU性能差这么多','new'))
     assert len(context['performance_comparison']['records']) == 2
+
+
+@pytest.mark.parametrize('question', [
+    '请根据已上传论文说明邻接矩阵如何归一化、训练验证测试划分和超参数。是否必须用 GPU？',
+    '比较论文方法和代码实现，给出学习率和 dropout，同时说明 CPU 是否能运行。',
+    'What is the algorithm and dropout? Can it run on GPU?',
+])
+def test_mixed_research_questions_are_not_replaced_by_device_template(question):
+    assert not copilot._gpu_capability_question(question)

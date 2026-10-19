@@ -199,3 +199,19 @@ def test_author_required_config_options_block_incomplete_execution(tmp_path):
     assert '--config' in command['blocked_reason'] and '--doc' in command['blocked_reason']
     from app.services.cli_contract import missing_required_options
     assert missing_required_options((tmp_path/'main.py').read_text(),['python','main.py','--config=x.yml','-d','qa'])==[]
+
+
+@pytest.mark.parametrize('goal', [
+    '当前服务器无 GPU，请根据本机情况选择兼容的 CPU 环境',
+    '没有可用 GPU，使用 CPU', '无需 CUDA，按 CPU 运行',
+    'No GPU is available; run on CPU', 'run without CUDA',
+    'GPU 不可用，请用 CPU',
+])
+def test_host_gpu_absence_does_not_request_gpu(goal):
+    assert not engine._goal_requires_gpu(goal)
+
+
+@pytest.mark.parametrize('goal', ['使用 GPU', '要求 CUDA 运行',
+    '本机没有 GPU；请在远程 GPU 上运行', 'Use GPU; do not fall back to CPU'])
+def test_positive_gpu_request_is_preserved(goal):
+    assert engine._goal_requires_gpu(goal)
