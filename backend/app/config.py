@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     reproduction_use_system_proxy: bool = True
     experiment_timeout_seconds: int = 43200  # Full multi-fold training may take hours.
     reproduction_log_chars: int = 60_000
+    pip_index_url: str = ""  # Empty preserves pip configuration / environment.
     hf_endpoint: str = "https://hf-mirror.com"
     model_provider: str = "openai_compatible"
     llm_api_key: str = Field(

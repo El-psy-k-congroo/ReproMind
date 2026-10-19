@@ -308,6 +308,8 @@ async def _run_process(
             "CONDA_PKGS_DIRS": str(conda_packages),
         }
     )
+    if index_url := getattr(get_settings(), 'pip_index_url', ''):
+        env['PIP_INDEX_URL'] = index_url
     if not getattr(get_settings(), 'reproduction_use_system_proxy', True):
         env.update({'NO_PROXY':'*','no_proxy':'*','HTTP_PROXY':'','HTTPS_PROXY':'','ALL_PROXY':''})
     # Directly launching python.exe from a Windows Conda environment does not

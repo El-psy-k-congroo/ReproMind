@@ -215,3 +215,13 @@ def test_host_gpu_absence_does_not_request_gpu(goal):
     '本机没有 GPU；请在远程 GPU 上运行', 'Use GPU; do not fall back to CPU'])
 def test_positive_gpu_request_is_preserved(goal):
     assert engine._goal_requires_gpu(goal)
+
+
+def test_configured_package_index_reaches_child_process(tmp_path, monkeypatch):
+    import asyncio, sys
+    from app.config import Settings
+    settings=Settings(_env_file=None,paper_projects_dir=tmp_path,pip_index_url='https://packages.example/simple')
+    monkeypatch.setattr(engine,'get_settings',lambda:settings)
+    code,output=asyncio.run(engine._run_process([sys.executable,'-c',
+        'import os; print(os.environ.get("PIP_INDEX_URL"))'],tmp_path,20))
+    assert code==0 and output.strip()=='https://packages.example/simple'
