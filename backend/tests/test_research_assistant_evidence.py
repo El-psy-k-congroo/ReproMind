@@ -410,3 +410,13 @@ def test_tensorflow_sparse_and_numbered_compute_nodes_are_gpu_execution_evidence
         evidence = runtime_evidence.device_log_evidence([{'log': 'nell-original.log',
             'head': f'Op {node} on device: /job:localhost/replica:0/task:0/device:GPU:0'}])
         assert evidence[0]['kind'] == 'gpu_compute_placement'
+
+
+def test_paper_parameter_values_survive_large_mixed_question_context():
+    parameters=[{'name':key,'value':value} for key,value in
+        [('learning_rate',0.01),('epochs',200),('hidden',16),('dropout',0.5),('weight_decay',0.0005),('early_stopping',10)]]
+    context={'job':{'run_id':'current','paper_spec':{'hyperparameters':parameters}},
+        'source_relevant_excerpts':[{'file':'model.py','excerpt':'x'*3000}]*30,
+        'paper_excerpt':'y'*30000}
+    packed=json.loads(copilot._bounded_prompt('解释论文方法、划分、超参数和设备',context,[],''))
+    assert packed['verified_run_facts']['paper_parameters_not_runtime']==parameters

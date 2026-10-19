@@ -162,6 +162,8 @@ def _bounded_prompt(question, context, history, summary, limit=15000):
     plans = named or plans
     facts = {
         'run_id': job.get('run_id'), 'status': job.get('status'), 'stage': job.get('stage'),
+        'paper_parameters_not_runtime': rows((job.get('paper_spec') or {}).get('hyperparameters') or [],
+            ['name', 'value', 'source', 'evidence']),
         'tuning_active': job.get('tuning_active'),
         'tuning_sessions': job.get('tuning_sessions'),
         'dataset_results_count': job.get('dataset_results_count'),
