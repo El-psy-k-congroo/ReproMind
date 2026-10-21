@@ -7,6 +7,7 @@ import ReproductionProgress from '../components/ReproductionProgress.vue'
 import ExperimentDashboard from '../components/ExperimentDashboard.vue'
 import ResearchCopilot from '../components/ResearchCopilot.vue'
 import type { ArtifactKind, ModelCatalog, Project, ReproductionRun } from '../types'
+import { paperExamples } from '../examples'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,8 +21,9 @@ const reproduction = ref<ReproductionRun | null>(null)
 const runHistory = ref<Array<{ id: string; status: string; auxiliary_active?: boolean; created_at: string; branch?: { base_run_id: string; title: string; file: string }; revision?: { base_run_id: string; title: string; files: string[] }; rerun?: { base_run_id: string; datasets: string[]; gpu_requested: boolean }; message: string }>>([])
 const selectedRunId = ref('')
 const startingReproduction = ref(false)
-const reproductionGoal = ref('复现论文核心实验')
-const authorRepository = ref('')
+const selectedExample = paperExamples.find(item => item.id === route.query.example)
+const reproductionGoal = ref<string>(selectedExample?.goal || '复现论文核心实验')
+const authorRepository = ref<string>(selectedExample?.repository || '')
 const approvingReproduction = ref(false)
 const deletingProject = ref(false)
 const modelCatalog = ref<ModelCatalog | null>(null)
