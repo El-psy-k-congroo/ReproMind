@@ -3,7 +3,6 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import type { AnalyticsOverview, ProjectListItem } from '../types'
-import { exampleNote, paperExamples, type PaperExample } from '../examples'
 
 const router = useRouter()
 const projects = ref<ProjectListItem[]>([])
@@ -15,31 +14,6 @@ const showCreate = ref(false)
 const openMenu = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
 const form = ref({ name: '', description: '', research_domain: '计算机科学' })
-const importingExample = ref('')
-const incompleteProject = ref('')
-
-async function importExample(example: PaperExample) {
-  if (importingExample.value) return
-  importingExample.value = example.id
-  error.value = ''
-  incompleteProject.value = ''
-  try {
-    const response = await fetch(example.pdf, { signal: AbortSignal.timeout(30000) })
-    if (!response.ok) throw new Error('示例论文读取失败，请重试。')
-    const pdf = await response.blob()
-    if ((await pdf.slice(0, 5).text()) !== '%PDF-') throw new Error('示例论文文件不完整，请重试。')
-    const project = await api.createProject({ name: `${example.name} · Cora 体验`, description: `${example.description}\n作者仓库：${example.repository}`, research_domain: '图机器学习' })
-    incompleteProject.value = project.id
-    await api.uploadArtifact(project.id, 'paper', new File([pdf], `${example.name}.pdf`, { type: 'application/pdf' }))
-    await api.uploadArtifact(project.id, 'note', new File([exampleNote(example)], '体验指引.md', { type: 'text/markdown' }))
-    window.dispatchEvent(new Event('repromind:projects-changed'))
-    await router.push({ path: `/projects/${project.id}`, query: { example: example.id } })
-    incompleteProject.value = ''
-  } catch (err) {
-    error.value = `${(err as Error).message}${incompleteProject.value ? ' 已创建的项目已保留，可打开项目继续上传。' : ''}`
-    await load()
-  } finally { importingExample.value = '' }
-}
 
 async function load() {
   loading.value = true
@@ -96,7 +70,6 @@ onMounted(load)
     </header>
 
     <div v-if="error" class="alert error">{{ error }}</div>
-    <button v-if="incompleteProject" class="button ghost" @click="router.push(`/projects/${incompleteProject}`)">打开已创建的示例项目</button>
 
     <section class="hero-panel">
       <div class="hero-copy">
@@ -122,18 +95,6 @@ onMounted(load)
       <div><strong>{{ projects.reduce((sum, item) => sum + item.artifact_count, 0) }}</strong><span>证据文件</span></div>
       <div><strong>{{ overview?.reproduction_runs ?? '—' }}</strong><span>近 30 天实验记录</span></div>
       <div><strong>{{ overview?.reproduced_projects ?? '—' }}</strong><span>近 30 天完整复现的项目</span></div>
-    </section>
-
-    <section class="examples-section">
-      <div class="section-title-row"><div><span class="kicker">PAPER EXAMPLES</span><h2>从示例论文开始</h2></div><span class="section-note">论文与指引导入你的个人项目</span></div>
-      <div class="example-grid">
-        <article v-for="example in paperExamples" :key="example.id" class="example-card">
-          <div class="example-heading"><span class="domain-pill">{{ example.name }}</span><span>CPU · Cora</span></div>
-          <h3>{{ example.title }}</h3><small>{{ example.authors }}</small><p>{{ example.description }}</p>
-          <div class="example-actions"><button class="button primary" :disabled="!!importingExample" @click="importExample(example)">{{ importingExample === example.id ? '正在导入…' : '导入示例论文' }}</button><a :href="example.pdf" target="_blank" rel="noopener">阅读论文</a><a :href="example.repository" target="_blank" rel="noopener">作者代码 ↗</a></div>
-        </article>
-      </div>
-      <p class="example-guidance">导入后，可先向复现助手提问，再启动实验准备。如果想要运行与 GPU 相关的实验，强烈推荐本地部署。</p>
     </section>
 
     <section class="projects-section">
@@ -175,16 +136,3 @@ onMounted(load)
     </div>
   </div>
 </template>
-
-<style scoped>
-.examples-section { margin: 30px 0; }
-.example-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.example-card { padding: 24px; background: var(--surface, #fff); border: 1px solid #dce5e1; border-radius: 18px; }
-.example-heading { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #5d726a; }
-.example-card h3 { margin: 16px 0 8px; line-height: 1.4; font-size: 18px; }
-.example-card small { color: #5d726a; }
-.example-card p, .example-guidance { color: #53675f; font-size: 13px; line-height: 1.8; }
-.example-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-top: 20px; }
-.example-actions a { font-size: 13px; color: #246e59; }
-@media (max-width: 760px) { .example-grid { grid-template-columns: 1fr; } }
-</style>
