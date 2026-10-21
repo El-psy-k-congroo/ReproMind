@@ -27,3 +27,7 @@ qa/reports/
 .playwright-cli/
 .pnpm-store/
 frontend/.vite/
+# Competition submissions and local maintenance contain private material.
+presentation/cangjie_*/
+qa/deployment/
+qa/submission_*/

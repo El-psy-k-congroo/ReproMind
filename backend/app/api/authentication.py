@@ -1,12 +1,12 @@
 """Account lifecycle: registration, sign-in, logout, password change and recovery."""
 import asyncio
 import hmac
-import re
 import secrets
 import time
 from collections import defaultdict, deque
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +21,14 @@ _attempts = defaultdict(deque)
 _DUMMY_HASH = password_hash('unavailable-account')
 
 
+def normalized_email(value: str) -> str:
+    try:
+        address = validate_email(value.strip(), check_deliverability=False, allow_smtputf8=False)
+    except EmailNotValidError as exc:
+        raise ValueError('请输入有效的邮箱地址') from exc
+    return address.ascii_email.lower()
+
+
 class Credentials(BaseModel):
     email: str = Field(min_length=3, max_length=128)
     password: str = Field(min_length=1, max_length=128)
@@ -29,10 +37,7 @@ class Credentials(BaseModel):
     @field_validator('email')
     @classmethod
     def email_address(cls, value):
-        value = value.strip().lower()
-        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', value):
-            raise ValueError('请输入有效的邮箱地址')
-        return value
+        return normalized_email(value)
 
 
 class Registration(Credentials):
@@ -56,6 +61,11 @@ class RecoveryReset(BaseModel):
     email: str = Field(min_length=3, max_length=128)
     recovery_code: str = Field(min_length=12, max_length=160)
     new_password: str = Field(min_length=10, max_length=128)
+
+    @field_validator('email')
+    @classmethod
+    def email_address(cls, value):
+        return normalized_email(value)
 
 
 def strong_password(value):

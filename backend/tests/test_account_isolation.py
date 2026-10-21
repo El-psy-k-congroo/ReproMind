@@ -127,6 +127,30 @@ def test_model_preferences_are_separate_files(tmp_path):
     finally: auth.current_owner.reset(first)
 
 
+@pytest.mark.parametrize('email', ['a..b@example.org', 'a@example..org', 'a@-example.org',
+                                  'a@example.org.', 'a@localhost', 'Name <a@example.org>'])
+def test_invalid_email_is_rejected_consistently_for_account_endpoints(account_client, email):
+    c, _ = account_client
+    values = {'email': email, 'username': '测试用户', 'password': 'ResearchPass123!',
+              'recovery_code': 'not-a-valid-recovery-code', 'new_password': 'NewResearchPass456!'}
+    for endpoint in ('register', 'login', 'recover'):
+        response = c.post('/api/auth/' + endpoint, json=values)
+        assert response.status_code == 422, (endpoint, response.status_code)
+
+
+def test_account_email_normalization_prevents_case_and_whitespace_duplicates(account_client):
+    c, _ = account_client
+    account, _ = register(c, ' Mixed.Name+tag@EXAMPLE.ORG ')
+    assert account['user']['email'] == 'mixed.name+tag@example.org'
+    duplicate = c.post('/api/auth/register', json={
+        'email': 'MIXED.NAME+TAG@example.org', 'username': '重复邮箱', 'password': 'ResearchPass123!'})
+    assert duplicate.status_code == 409
+    recovered = c.post('/api/auth/recover', json={
+        'email': ' MIXED.NAME+TAG@EXAMPLE.ORG ', 'recovery_code': account['recovery_code'],
+        'new_password': 'NewResearchPass456!'})
+    assert recovered.status_code == 200
+
+
 def test_http_model_preferences_follow_authenticated_user(account_client,tmp_path,monkeypatch):
     from app.api import model_routing
     settings=SimpleNamespace(model_routing_path=tmp_path/'models.json',model_provider='moma')

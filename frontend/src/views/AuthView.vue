@@ -75,6 +75,7 @@ async function copyKey() {
         </div>
         <label v-if="registering" class="field-label">昵称<input v-model="form.username" autocomplete="nickname" minlength="2" maxlength="40" required placeholder="你希望如何称呼自己" /></label>
         <label class="field-label">邮箱<input v-model="form.email" type="email" autocomplete="email" maxlength="128" required placeholder="name@example.com" /></label>
+        <p v-if="registering || recovering" class="field-hint">邮箱用于登录，当前不发送验证或重置邮件。请保存账号恢复密钥。</p>
         <label v-if="recovering" class="field-label">账号恢复密钥<input v-model="form.recovery_code" autocomplete="off" required minlength="12" maxlength="160" placeholder="输入注册时保存的恢复密钥" /></label>
         <label class="field-label">{{ recovering ? '新密码' : '密码' }}
           <div class="password-control"><input v-model="form.password" :type="visible ? 'text' : 'password'" :autocomplete="registering || recovering ? 'new-password' : 'current-password'" :minlength="registering || recovering ? 10 : 1" maxlength="128" required :placeholder="registering || recovering ? '至少 10 位，包含字母和数字' : '输入你的密码'" /><button type="button" :aria-pressed="visible" :aria-label="visible ? '隐藏密码' : '显示密码'" @click="visible=!visible">{{ visible ? '隐藏' : '显示' }}</button></div>
