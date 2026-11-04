@@ -31,6 +31,9 @@ def test_same_named_repository_cache_requires_owner_identity(tmp_path, monkeypat
         (target / 'train.py').write_text('new_author = True', encoding='utf-8')
         return 0, 'clone complete'
     monkeypatch.setattr(engine, '_run_process', clone)
+    async def unavailable_archive(*args):
+        raise RuntimeError('archive unavailable in offline Git fallback fixture')
+    monkeypatch.setattr(engine, '_download_repository_archive', unavailable_archive)
     source, _ = asyncio.run(engine._clone_repository('https://github.com/author/model', tmp_path, tmp_path))
     assert source != old and engine._repository_cache_matches(source, 'https://github.com/author/model.git')
     assert (old / 'train.py').read_text(encoding='utf-8') == 'old_author = True'

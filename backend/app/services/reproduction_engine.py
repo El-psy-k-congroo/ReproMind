@@ -50,6 +50,7 @@ from .author_data_loaders import declared_hub_loaders
 from .task_context import task_contract
 from .runtime_compatibility import terminal_exception, compatibility_plan
 from .execution_sandbox import current_workspace, sandbox_command, environment_root
+from .repository_download import download_github_archive, RepositoryDownloadError
 
 
 REPOSITORY_PATTERN = re.compile(
@@ -195,9 +196,9 @@ def _repository_cache_matches(source: Path, url: str) -> bool:
         return False
 
 
-def _record_repository_identity(source: Path, url: str) -> None:
+def _record_repository_identity(source: Path, url: str, **evidence) -> None:
     (source / ".repromind-repository.json").write_text(
-        json.dumps({"repository_url": _repository_identity(url)}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"repository_url": _repository_identity(url), **evidence}, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -429,38 +430,55 @@ async def _run_author_process(*args, **kwargs):
     return code, output
 
 
-async def _clone_repository(url: str, workspace: Path, run_workspace: Path) -> tuple[Path, str]:
+async def _clone_repository(url: str, workspace: Path, run_workspace: Path, progress=None) -> tuple[Path, str]:
     if urlparse(url).hostname == 'zenodo.org':
         return await _download_zenodo_source(url, workspace, run_workspace)
     repository_name = _slug(Path(urlparse(url).path).stem, "repository")
     cache_name = _repository_cache_name(url)
     target = workspace / "sources" / cache_name
     legacy = workspace / "sources" / repository_name
-    for candidate in (target, legacy):
-        if candidate.is_dir() and _repository_cache_matches(candidate, url) and _has_runnable_source(candidate):
+    candidates = [target, legacy, *sorted((workspace / 'sources').glob(f'{cache_name}-*'), reverse=True)]
+    for candidate in candidates:
+        if (candidate.is_dir() and (candidate / '.repromind-repository.json').is_file()
+                and _repository_cache_matches(candidate, url) and _has_runnable_source(candidate)):
+            if candidate.name.startswith(f'{cache_name}-archive'):
+                candidate = _archive_source_root(candidate)
             return candidate, "已核对仓库来源，复用论文项目中已获取的源码。"
-    cached_archive = workspace / 'sources' / f'{cache_name}-archive'
-    if (cached_archive.is_dir() and _repository_cache_matches(cached_archive, url)
-            and _has_runnable_source(cached_archive)):
-        return await _download_repository_archive(url, workspace, run_workspace)
     if target.exists():
         target = workspace / "sources" / f"{cache_name}-{time.time_ns()}"
     attempt_logs: list[str] = []
+    if urlparse(url).hostname == 'github.com':
+        try:
+            return await _download_repository_archive(url, workspace, run_workspace, progress)
+        except ReproductionPaused:
+            raise
+        except Exception as exc:
+            attempt_logs.append(f"官方源码包获取未完成：{exc}\n{getattr(exc, 'diagnostics', '')}")
     code = 1
     output = ""
     for attempt in range(1, 3):
         if attempt > 1 and target.exists():
             target = workspace / "sources" / f"{cache_name}-retry-{attempt}-{time.time_ns()}"
-        code, output = await _run_process(
-            ["git", "clone", "--depth", "1", url, str(target)],
-            run_workspace,
-            get_settings().git_clone_timeout_seconds,
-        )
+        if progress:
+            await progress(f"正在通过 Git 获取作者源码，尝试 {attempt}/2")
+        command = ["git", "clone", "--depth", "1", "--single-branch", "--no-tags", "--progress", url, str(target)]
+        if attempt > 1:
+            command = ["git", "-c", "http.version=HTTP/1.1", *command[1:]]
+        try:
+            code, output = await _run_process(
+                command, run_workspace, get_settings().git_clone_timeout_seconds,
+            )
+        except OSError as exc:
+            attempt_logs.append(f"无法启动 Git：{type(exc).__name__}: {exc}")
+            code = 127
+            break
         attempt_logs.append(f"clone attempt {attempt}/2\n{output}")
         if code == 0 or "invalid path" in output.lower():
             break
     output = "\n".join(attempt_logs)
-    if code != 0 and (target / ".git").is_dir():
+    # A timed-out transfer has no usable HEAD. Recovery is only for checkout
+    # failures after objects arrived, such as Windows-incompatible filenames.
+    if code != 0 and "invalid path" in output.lower() and (target / ".git").is_dir():
         archive = run_workspace / f"{repository_name}-git-snapshot.zip"
         archive_code, archive_output = await _run_process(
             ["git", "-C", str(target), "archive", "--format=zip", f"--output={archive}", "HEAD"],
@@ -475,14 +493,11 @@ async def _clone_repository(url: str, workspace: Path, run_workspace: Path) -> t
                 _record_repository_identity(snapshot, url)
                 return snapshot, f"{output}\n已从 Git 对象库恢复源码；跳过 {len(skipped)} 个 Windows 不兼容路径：{skipped[:8]}"
     if code != 0:
-        try:
-            archive_source, archive_log = await _download_repository_archive(
-                url, workspace, run_workspace
-            )
-            return archive_source, f"{output}\n{archive_log}"
-        except Exception as archive_error:
-            output = f"{output}\ncodeload fallback failed: {type(archive_error).__name__}: {archive_error}"
-        raise RuntimeError(f"仓库克隆失败：{output[-4000:]}")
+        raise RepositoryDownloadError(
+            "作者仓库获取未完成。官方源码下载和 Git 获取均未成功，请重试、核对仓库地址或上传作者源码。",
+            [output[-8000:]])
+    if not _has_runnable_source(target):
+        raise RepositoryDownloadError("作者仓库已获取，但未找到支持的可运行源码，请核对仓库或上传作者代码。", [output[-8000:]])
     _record_repository_identity(target, url)
     return target, output
 
@@ -586,8 +601,13 @@ def _extract_source_archive(archive: zipfile.ZipFile, target: Path) -> list[str]
     return skipped
 
 
+def _archive_source_root(target: Path) -> Path:
+    children = [item for item in target.iterdir() if item.name not in {"__MACOSX", ".repromind-repository.json"}]
+    return children[0] if len(children) == 1 and children[0].is_dir() else target
+
+
 async def _download_repository_archive(
-    url: str, workspace: Path, run_workspace: Path
+    url: str, workspace: Path, run_workspace: Path, progress=None
 ) -> tuple[Path, str]:
     parsed = urlparse(url)
     if parsed.hostname != "github.com":
@@ -597,36 +617,19 @@ async def _download_repository_archive(
         raise ValueError("GitHub 仓库地址格式不正确")
     owner, repository = parts
     target = workspace / "sources" / f"{_repository_cache_name(url)}-archive"
-    if target.is_dir() and _repository_cache_matches(target, url) and _has_runnable_source(target):
-        children = [item for item in target.iterdir() if item.name not in {"__MACOSX", ".repromind-repository.json"}]
-        return (children[0] if len(children) == 1 and children[0].is_dir() else target), "复用 codeload 获取的作者仓库。"
+    for candidate in [target, *sorted(target.parent.glob(f'{target.name}-*'), reverse=True)]:
+        if candidate.is_dir() and _repository_cache_matches(candidate, url) and _has_runnable_source(candidate):
+            return _archive_source_root(candidate), "复用已校验的 GitHub 作者源码包。"
     if target.exists():
         target = workspace / "sources" / f"{_repository_cache_name(url)}-archive-{time.time_ns()}"
 
-    async def fetch(branch: str) -> bytes:
-        archive_url = f"https://codeload.github.com/{owner}/{repository}/zip/refs/heads/{branch}"
-        async with httpx.AsyncClient(follow_redirects=True, timeout=get_settings().git_clone_timeout_seconds) as client:
-            response = await client.get(archive_url)
-            response.raise_for_status()
-            if len(response.content) > 120_000_000:
-                raise ValueError("仓库 ZIP 超过 120 MB 安全限制")
-            return response.content
-
-    payload = b""
-    selected_branch = ""
-    errors: list[str] = []
-    for branch in ("master", "main"):
-        try:
-            payload = await fetch(branch)
-            selected_branch = branch
-            break
-        except Exception as exc:
-            errors.append(f"{branch}: {type(exc).__name__}: {exc}")
-    if not payload:
-        raise RuntimeError("；".join(errors))
-
-    archive_path = run_workspace / f"{_slug(repository)}-{selected_branch}.zip"
-    archive_path.write_bytes(payload)
+    archive_path = run_workspace / f"{_slug(repository)}-source-{time.time_ns()}.zip"
+    evidence = await download_github_archive(
+        owner, repository, archive_path,
+        timeout_seconds=max(30, min(120, get_settings().git_clone_timeout_seconds * 2)),
+        trust_env=getattr(get_settings(), 'reproduction_use_system_proxy', True),
+        progress=progress, check_pause=lambda: _raise_if_paused(CURRENT_JOB_ID.get()),
+    )
     target.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive_path) as archive:
         skipped = _extract_source_archive(archive, target)
@@ -634,11 +637,12 @@ async def _download_repository_archive(
     source = children[0] if len(children) == 1 and children[0].is_dir() else target
     if not _has_runnable_source(source):
         raise RuntimeError("下载了仓库归档，但没有找到可执行源码")
-    _record_repository_identity(source, url)
+    _record_repository_identity(source, url, acquisition=evidence)
     # The outer cache also identifies the repository; its marker must not affect root selection.
     if source != target:
-        _record_repository_identity(target, url)
-    return source, f"git 传输失败后已通过 GitHub codeload 获取作者仓库（{len(payload)} bytes，{selected_branch}）；跳过 {len(skipped)} 个不兼容路径。"
+        _record_repository_identity(target, url, acquisition=evidence)
+    return source, ("\n".join(evidence['diagnostics']) +
+                    f"\n已通过 GitHub 官方通道获取作者默认分支源码（{evidence['archive_bytes']} bytes）；SHA256：{evidence['archive_sha256']}；跳过 {len(skipped)} 个不兼容路径。")
 
 
 def _acquire_uploaded_code(artifacts: list, workspace: Path) -> Path | None:
@@ -1818,7 +1822,9 @@ def _archive_preparation(job: ReproductionJob) -> None:
                 "dataset_spec": job.dataset_spec or {}, "environment_spec": job.environment_spec or {},
                 "execution_command": job.execution_command or {},
                 "action_required": (job.result_json or {}).get("action_required"),
-                "user_action": (job.result_json or {}).get("user_action", "")}
+                "user_action": (job.result_json or {}).get("user_action", ""),
+                "logs": (getattr(job, "logs", "") or "")[-8000:],
+                "error_message": getattr(job, "error_message", "")}
     result = dict(job.result_json or {})
     history = list(result.get("preparation_history") or [])
     if any(snapshot[key] for key in ("code_spec", "code_validation", "dataset_spec", "environment_spec", "execution_command", "action_required")):
@@ -2148,14 +2154,17 @@ async def prepare_reproduction(job_id: str) -> None:
                 job.source_mode = "paper_repository"
                 await _advance(session, job, "source_acquisition", 36, f"正在获取作者仓库：{repo_url}")
                 try:
-                    source, clone_log = await _clone_repository(repo_url, workspace, run_workspace)
+                    async def source_progress(message):
+                        await _advance(session, job, "source_acquisition", 36, message)
+                    source, clone_log = await _clone_repository(repo_url, workspace, run_workspace, source_progress)
                     job.logs = clone_log[-8000:]
                 except RuntimeError as exc:
-                    job.logs = str(exc)[-8000:]
-                    job.error_message = "作者仓库获取失败：" + str(exc)[-1600:]
+                    job.logs = str(getattr(exc, 'diagnostics', exc))[-8000:]
+                    reason = getattr(exc, 'user_message', "作者仓库获取失败，请重试、核对地址或上传作者源码。")
+                    job.error_message = reason
                     job.result_json = {**(job.result_json or {}), "action_required": {
-                        "kind": "source_unavailable", "reason": "作者仓库获取失败，未转入自动生成代码。",
-                        "detail": str(exc)[-1600:], "options": ["retry_source", "set_repository", "upload_code"]}}
+                        "kind": "source_unavailable", "reason": reason,
+                        "detail": job.logs[-1600:], "options": ["retry_source", "set_repository", "upload_code"]}}
                     await _advance(session, job, "source_acquisition", 36,
                                    "请重试作者仓库、提供正确地址或上传作者源码", status=ReproductionStatus.needs_input)
                     return

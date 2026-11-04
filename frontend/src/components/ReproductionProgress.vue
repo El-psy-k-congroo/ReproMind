@@ -327,7 +327,8 @@ const displayedError = computed(() => {
     <div v-if="run.status === 'needs_input' && run.result_json.action_required?.kind === 'paper_spec_failed'" class="run-error data-required"><strong>实验信息待核验（不是作者代码运行失败）</strong><span>{{ run.result_json.action_required.reason }}</span><span>{{ run.current_stage === 'paper_parsing' ? '旧任务被论文规范校验阻断；继续后先获取作者源码，再核验数据集与指标。' : run.result_json.action_required.detail }}</span><button class="button primary" @click="$emit('resume')">继续作者源码复现准备（不运行实验）</button></div>
     <div v-if="(run.status === 'needs_input' && !['hardware_unavailable', 'paper_spec_failed'].includes(run.result_json.action_required?.kind || '')) || (run.status === 'failed' && !run.approved_at)" class="run-error data-required">
       <strong>{{ run.result_json.action_required?.kind === 'code_generation_failed' ? '未开源自动编码已暂缓，旧草稿保留' : '需要获取作者源码' }}</strong>
-      <span>{{ run.result_json.action_required?.detail || run.result_json.action_required?.reason || run.message }}</span>
+      <span>{{ run.result_json.action_required?.reason || run.message }}</span>
+      <details v-if="run.result_json.action_required?.detail"><summary>查看源码获取诊断</summary><pre>{{ run.result_json.action_required.detail }}</pre></details>
       <details v-if="run.result_json.code_generation_attempts?.length"><summary>检查与请求记录（不代表完整生成失败次数）</summary>
         <div v-for="attempt in run.result_json.code_generation_attempts || []" :key="attempt.attempt"><small>{{ attempt.file ? `${attempt.file} · ` : '' }}{{ codingPhase(attempt.phase) }}：{{ attempt.reason }}</small><details v-if="attempt.review_response"><summary>原始审查意见（未通过证据校验，不作为已确认缺陷）</summary><pre>{{ reviewResponseText(attempt.review_response) }}</pre></details></div>
       </details>
