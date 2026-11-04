@@ -500,7 +500,8 @@ async def current_activity(
     if path.is_file():
         with path.open("rb") as stream:
             stream.seek(max(0, path.stat().st_size - 5000))
-            tail = stream.read().decode("utf-8", errors="replace")
+            from ..services.terminal_output import readable_output
+            tail = readable_output(stream.read().decode("utf-8", errors="replace"))
     return {"active": not recent_operation and job.status == (ReproductionStatus.completed if ablation_mode or tuning_mode else ReproductionStatus.executing), "worker_active": has_active_work(job.id), "operation": {
         key: value for key, value in operation.items() if key != "log_path"
     }, "log_tail": tail}

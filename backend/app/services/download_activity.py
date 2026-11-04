@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 
 from ..config import get_settings
+from .terminal_output import readable_output
+from .ranged_download import transfer_ranges
 
 
 class _DownloadForm(HTMLParser):
@@ -112,6 +114,7 @@ async def download_file(session, job, workspace: Path, dataset: str, urls: list[
                 await publish(f'{dataset}: 连接下载源，第 {attempt}/{max_attempts} 次尝试：{url}')
                 try:
                     async with httpx.AsyncClient(follow_redirects=True,
+                            trust_env=getattr(settings, 'reproduction_use_system_proxy', True),
                             timeout=httpx.Timeout(read_timeout, connect=connect_timeout)) as client:
                         saved = json.loads(metadata.read_text()) if metadata.is_file() else {}
                         if resume and partial.is_file() and saved.get('url') and saved.get('url') != url and saved.get('validator'):
@@ -178,25 +181,38 @@ async def download_file(session, job, workspace: Path, dataset: str, urls: list[
                             await publish(f'{dataset}: 已连接，预计字节数 {total if total else "未知"}')
                             last_publish = time.monotonic()
                             transfer_start = last_publish
-                            with partial.open('ab' if offset else 'wb') as writer:
-                                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                                    check_pause(job.id)
-                                    if operation['downloaded_bytes'] == 0 and re.match(br'\s*(?:<!doctype\s+html|<html|<head)',chunk[:512],re.I):
-                                        raise ValueError('下载内容是 HTML 页面，不能作为数据或模型文件')
-                                    operation['downloaded_bytes'] += len(chunk)
-                                    if operation['downloaded_bytes'] > max_bytes:
-                                        raise ValueError('数据文件超过自动下载体积限制')
-                                    writer.write(chunk)
-                                    writer.flush()
-                                    if time.monotonic() - last_publish >= 1:
-                                        elapsed = time.monotonic() - transfer_start
-                                        rate = (operation['downloaded_bytes'] - offset) / max(elapsed, .001)
-                                        remaining = max(0,total-operation['downloaded_bytes']) if total is not None else None
-                                        operation.update(bytes_per_second=round(rate,1), eta_seconds=round(remaining/max(rate,1)) if remaining is not None else None)
-                                        await publish(f"{dataset}: 已下载 {operation['downloaded_bytes']} 字节，{rate/1024:.1f} KiB/s，预计剩余 {operation['eta_seconds']} 秒")
-                                        last_publish = time.monotonic()
-                                        if slow_mirror(elapsed,operation['downloaded_bytes']-offset,remaining,source_index+1<len(sources)):
-                                            raise _SlowMirror('下载源持续低速，保留分段并切换下一已知来源')
+                            async def range_progress(received, rate, connections, initial):
+                                operation.update(downloaded_bytes=received, bytes_per_second=round(rate, 1),
+                                    eta_seconds=round(max(0, total-received)/max(rate, 1)),
+                                    connections=connections, resumed_bytes=initial)
+                                await publish(f"{dataset}: {connections} 路分段下载，已取得 {received}/{total} 字节，{rate/1024:.1f} KiB/s")
+                            parallel = False
+                            if response.headers.get('accept-ranges', '').lower() == 'bytes':
+                                parallel = await transfer_ranges(client, str(response.url), partial, total, offset,
+                                    response.headers.get('etag') or response.headers.get('last-modified') or '',
+                                    getattr(settings, 'dataset_download_workers', 4), range_progress,
+                                    lambda: check_pause(job.id))
+                            if not parallel:
+                                operation.update(downloaded_bytes=offset, resumed_bytes=offset)
+                                with partial.open('ab' if offset else 'wb') as writer:
+                                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                                        check_pause(job.id)
+                                        if operation['downloaded_bytes'] == 0 and re.match(br'\s*(?:<!doctype\s+html|<html|<head)',chunk[:512],re.I):
+                                            raise ValueError('下载内容是 HTML 页面，不能作为数据或模型文件')
+                                        operation['downloaded_bytes'] += len(chunk)
+                                        if operation['downloaded_bytes'] > max_bytes:
+                                            raise ValueError('数据文件超过自动下载体积限制')
+                                        writer.write(chunk)
+                                        writer.flush()
+                                        if time.monotonic() - last_publish >= 1:
+                                            elapsed = time.monotonic() - transfer_start
+                                            rate = (operation['downloaded_bytes'] - offset) / max(elapsed, .001)
+                                            remaining = max(0,total-operation['downloaded_bytes']) if total is not None else None
+                                            operation.update(bytes_per_second=round(rate,1), eta_seconds=round(remaining/max(rate,1)) if remaining is not None else None)
+                                            await publish(f"{dataset}: 已下载 {operation['downloaded_bytes']} 字节，{rate/1024:.1f} KiB/s，预计剩余 {operation['eta_seconds']} 秒")
+                                            last_publish = time.monotonic()
+                                            if slow_mirror(elapsed,operation['downloaded_bytes']-offset,remaining,source_index+1<len(sources)):
+                                                raise _SlowMirror('下载源持续低速，保留分段并切换下一已知来源')
                             if not operation['downloaded_bytes']:
                                 raise ValueError('下载文件为空')
                             if total is not None and not response.headers.get('content-encoding') and operation['downloaded_bytes'] != total:
@@ -268,4 +284,4 @@ def operation_log_tail(workspace: Path, job_id: str, operation: dict, limit=2400
         return ''
     with path.open('rb') as stream:
         stream.seek(max(0, path.stat().st_size - limit))
-        return stream.read().decode('utf-8', errors='replace')
+        return readable_output(stream.read().decode('utf-8', errors='replace'))

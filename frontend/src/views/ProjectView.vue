@@ -7,6 +7,7 @@ import ReproductionProgress from '../components/ReproductionProgress.vue'
 import ExperimentDashboard from '../components/ExperimentDashboard.vue'
 import ResearchCopilot from '../components/ResearchCopilot.vue'
 import type { ArtifactKind, ModelCatalog, Project, ReproductionRun } from '../types'
+import { demoLink, resolveRunId } from '../demoStages'
 
 const route = useRoute()
 const router = useRouter()
@@ -129,7 +130,7 @@ async function refreshReproduction() {
     const history = await api.listReproductionRuns(projectId)
     if (project.value?.id !== projectId) return
     runHistory.value = history
-    if (!runHistory.value.some(item => item.id === selectedRunId.value)) selectedRunId.value = runHistory.value[0]?.id || ''
+    selectedRunId.value = resolveRunId(history, selectedRunId.value, String(route.query.run || ''))
     const runId = selectedRunId.value
     const run = runId ? await api.getReproduction(projectId, runId) : null
     if (project.value?.id !== projectId || selectedRunId.value !== runId) return
@@ -141,6 +142,12 @@ async function refreshReproduction() {
     }
   } catch (err) {
     if (project.value?.id !== projectId) return
+    if ((err as Error).message.startsWith('链接指定的实验记录不存在')) {
+      reproduction.value = null
+      error.value = (err as Error).message
+      stopReproductionPolling()
+      return
+    }
     error.value = `状态查询暂时失败：${(err as Error).message}。这不是数据下载或实验失败，正在自动重试。`
     nextPollAt = Date.now() + Math.min(15000, 1500 * 2 ** Math.min(++pollFailures, 4))
   } finally { refreshingRun = false }
@@ -148,6 +155,7 @@ async function refreshReproduction() {
 
 async function selectRun(id: string) {
   selectedRunId.value = id
+  await router.replace({ query: { ...route.query, run: id } })
   if (!project.value) return
   try { reproduction.value = await api.getReproduction(project.value.id, id) }
   catch (err) { error.value = (err as Error).message }
@@ -155,6 +163,7 @@ async function selectRun(id: string) {
 
 async function branchStarted(runId: string) {
   selectedRunId.value = runId
+  await router.replace({ query: { ...route.query, run: runId } })
   await refreshReproduction()
   startReproductionPolling()
 }
@@ -178,6 +187,7 @@ async function startReproduction() {
   try {
     reproduction.value = await api.startReproduction(project.value.id, selectedModel.value, 'full', reproductionGoal.value.trim() || '复现论文核心实验', authorRepository.value.trim())
     selectedRunId.value = reproduction.value.id
+    await router.replace({ query: { ...route.query, run: reproduction.value.id } })
     startReproductionPolling()
   } catch (err) {
     error.value = (err as Error).message
@@ -284,6 +294,7 @@ watch(() => route.params.id, async (id, oldId) => {
   await scrollToSection()
 })
 watch(() => route.query.section, scrollToSection)
+watch(() => route.query.run, () => { void refreshReproduction() })
 onUnmounted(stopReproductionPolling)
 </script>
 
@@ -306,6 +317,7 @@ onUnmounted(stopReproductionPolling)
         <div class="model-menu-wrap"><button class="model-menu-trigger" :aria-expanded="showModelMenu" @click="showModelMenu = !showModelMenu"><span>模型</span><strong>{{ selectedModel }}</strong><b>⌄</b></button><div v-if="showModelMenu" class="model-menu"><small>新复现任务使用此模型</small><button v-for="model in modelCatalog?.models || [{ id: selectedModel, label: selectedModel }]" :key="model.id" :class="{ selected: selectedModel === model.id }" @click="selectedModel = model.id; showModelMenu = false">{{ model.label }}<span v-if="selectedModel === model.id">✓</span></button></div></div>
         <button class="button secondary" @click="uploadKind = 'paper'; showUpload = !showUpload">＋ 添加证据</button>
         <button class="button secondary" @click="showCopilot = true">复现协作</button>
+        <RouterLink v-if="reproduction" class="button secondary" :to="demoLink(project.id, reproduction.id)" target="_blank">五分钟演示</RouterLink>
         <button v-if="reproduction && (['queued', 'running', 'executing'].includes(reproduction.status) || (!!reproduction.result_json.ablation_active || !!reproduction.result_json.tuning_active) && reproduction.status === 'completed')" class="button secondary" @click="pauseReproduction">暂停任务</button>
         <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">恢复任务</button>
         <button class="button ghost danger-text" :disabled="deletingProject" @click="deleteCurrentProject">{{ deletingProject ? '正在删除项目与环境…' : '删除项目' }}</button>

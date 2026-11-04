@@ -49,8 +49,9 @@ class CopilotQuestion(BaseModel):
 
 
 def _message_payload(message: CopilotMessage) -> dict:
+    from ..services.terminal_output import readable_output
     return {
-        "id": message.id, "role": message.role, "content": message.content,
+        "id": message.id, "role": message.role, "content": readable_output(message.content),
         "conversation_id": message.conversation_id,
         "context": message.context_json or {}, "token_usage": message.token_usage,
         "created_at": message.created_at,
@@ -991,7 +992,8 @@ def _workspace_context(context, job, workspace, question, terms,
         if workspace in log_path.parents and log_path.is_file() and log_path.stat().st_size <= 20_000_000:
             with log_path.open("rb") as stream:
                 stream.seek(max(0, log_path.stat().st_size - 2400))
-                context["active_operation_log_tail"] = _redact(stream.read().decode("utf-8", errors="replace"))
+                from ..services.terminal_output import readable_output
+                context["active_operation_log_tail"] = _redact(readable_output(stream.read().decode("utf-8", errors="replace")))
     if _recorded_results_requested(question):
         return context
     active_draft = (job.code_spec or {}).get("draft_source") if (job.code_spec or {}).get("draft_files") else ""

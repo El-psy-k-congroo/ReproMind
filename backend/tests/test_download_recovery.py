@@ -267,7 +267,7 @@ def test_downloader_records_one_failed_source_and_continues_next_request(tmp_pat
 def test_real_local_http_transfer_produces_durable_evidence_without_training(tmp_path, monkeypatch):
     original_client = httpx.AsyncClient
     # Local test traffic must not be routed through the host's external HTTP proxy.
-    monkeypatch.setattr(downloads.httpx, 'AsyncClient', lambda **kwargs: original_client(trust_env=False, **kwargs))
+    monkeypatch.setattr(downloads.httpx, 'AsyncClient', lambda **kwargs: original_client(**{**kwargs, 'trust_env': False}))
     job, workspace = job_fixture(tmp_path)
     payload = b'harmless-test-payload'
     async def run():

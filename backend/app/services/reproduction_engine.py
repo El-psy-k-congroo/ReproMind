@@ -305,7 +305,13 @@ async def _run_process(
             "HF_ENDPOINT": get_settings().hf_endpoint,
             "PYTHONUNBUFFERED": "1",
             "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8:backslashreplace",
             "CONDA_PKGS_DIRS": str(conda_packages),
+            "CONDA_NUMBER_CHANNEL_NOTICES": "0",
+            "CONDA_NOTIFY_OUTDATED_CONDA": "false",
+            "CONDA_QUIET": "true",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_PROGRESS_BAR": "off",
         }
     )
     if index_url := getattr(get_settings(), 'pip_index_url', ''):
@@ -394,7 +400,8 @@ async def _run_process(
                 captured = reader.read().decode("utf-8", errors="replace")
         else:
             captured = (raw or b"").decode("utf-8", errors="replace")[-get_settings().reproduction_log_chars:]
-        return (124 if timed_out else process.returncode or (1 if child_failure else 0)), captured + (
+        from .terminal_output import readable_output
+        return (124 if timed_out else process.returncode or (1 if child_failure else 0)), readable_output(captured) + (
             '\n[ChildProcessFailure] 已确认 Windows 子进程启动失败，停止仍在等待的本任务进程树，转入运行纠错。' if child_failure else
             f"\n命令超过 {timeout_seconds} 秒，已终止。" if timed_out else ""
         )
@@ -2886,7 +2893,26 @@ async def _run_environment_operation(session, job, workspace, command, timeout, 
     await session.commit()
     output = ""
     try:
-        code, output = await _run_process(command, workspace, timeout, output_path=log_path)
+        from .environment_network import direct_pip_retry
+        inherited_direct = ((job.result_json or {}).get('pip_network_route') == 'direct_local_proxy_retry')
+        known_direct = direct_pip_retry(command, 'ProxyError') if inherited_direct else None
+        if known_direct:
+            code, output = await _run_process(command, workspace, timeout, extra_env=known_direct, output_path=log_path)
+        else:
+            code, output = await _run_process(command, workspace, timeout, output_path=log_path)
+        direct = direct_pip_retry(command, output) if code != 0 else None
+        if direct and getattr(get_settings(), 'reproduction_use_system_proxy', True):
+            _raise_if_paused(job.id)
+            log_path = log_path.with_name(log_path.stem+'-direct'+log_path.suffix)
+            operation = {**operation, 'log_path': str(log_path), 'network_route': 'direct_local_proxy_retry'}
+            job.result_json = {**(job.result_json or {}), 'active_operation': operation}
+            await session.commit()
+            first_output = output
+            code, retry_output = await _run_process(command, workspace, timeout, extra_env=direct, output_path=log_path)
+            output = first_output + '\n本机代理连接失败，对同一软件源直连重试（保持TLS校验）：\n' + retry_output
+            if code == 0:
+                job.result_json = {**(job.result_json or {}), 'pip_network_route': 'direct_local_proxy_retry'}
+                await session.commit()
         return code, output
     finally:
         # Preserve a bounded tail on pause/error as well as normal completion.

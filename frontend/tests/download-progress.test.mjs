@@ -6,8 +6,12 @@ import ts from 'typescript'
 const view = fs.readFileSync(new URL('../src/views/ProjectView.vue', import.meta.url), 'utf8')
 const source = view.slice(view.indexOf('let refreshingRun ='), view.indexOf('\nasync function selectRun('))
 const javascript = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+const helper = fs.readFileSync(new URL('../src/demoStages.ts', import.meta.url), 'utf8')
+const helperJs = ts.transpileModule(helper, { compilerOptions: { module: ts.ModuleKind.ES2022 } }).outputText
+const {resolveRunId} = await import(`data:text/javascript;base64,${Buffer.from(helperJs).toString('base64')}`)
 function fixture(api) {
   const ctx = { api, project: {value:{id:'project'}}, selectedRunId:{value:'run'},
+    resolveRunId, route:{query:{}},
     runHistory:{value:[]}, reproduction:{value:{id:'run', marker:'existing'}}, error:{value:''},
     stopReproductionPolling:()=>{ctx.stopped++}, stopped:0 }
   const refresh = new Function(...Object.keys(ctx), `${javascript};return refreshReproduction`)(...Object.values(ctx))

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     dataset_download_timeout_seconds: int = Field(default=1800, ge=1, le=86400)
     dataset_download_read_timeout_seconds: int = Field(default=180, ge=1, le=86400)
     dataset_download_connect_timeout_seconds: int = Field(default=60, ge=1, le=86400)
+    dataset_download_workers: int = Field(default=4, ge=1, le=8)
     dataset_max_download_bytes: int = Field(default=12_000_000_000, ge=1)
     dataset_max_extract_bytes: int = Field(default=50_000_000_000, ge=1)
     dataset_max_archive_files: int = Field(default=250_000, ge=1)

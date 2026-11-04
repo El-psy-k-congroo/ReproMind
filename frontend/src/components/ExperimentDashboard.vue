@@ -6,7 +6,7 @@ import { runDatasetScope } from '../runScope'
 import { curveSamples, nearestSample } from '../curveSamples'
 import type { DatasetResult, ReproductionActivity, ReproductionRun, TelemetryPoint, TelemetrySeries, TuningPlan } from '../types'
 
-const props = defineProps<{ run: ReproductionRun }>()
+const props = defineProps<{ run: ReproductionRun; readOnly?: boolean }>()
 const emit = defineEmits<{ ablationStarted: []; recoveryStarted: [runId: string] }>()
 const recoveryPlans = ref<TuningPlan[]>([])
 const recoveryOpen = ref(false)
@@ -21,6 +21,7 @@ const canReviewRecovery = computed(() => props.run.status === 'completed' && !pr
 const canReviewOptimization = computed(() => props.run.status === 'completed' && !props.run.result_json.tuning_active && results.value.some(row => row.return_code === 0 && Object.keys(row.metrics).length > 0))
 watch(() => props.run.id, () => { recoveryOpen.value = false; recoveryPlans.value = []; recoveryReviewed.value = false; recoveryError.value = '' })
 async function reviewRecovery(purpose: 'recovery' | 'validation_optimization' = 'recovery') {
+  if (props.readOnly) return
   if (recoveryBusy.value || !(purpose === 'recovery' ? canReviewRecovery.value : canReviewOptimization.value)) return
   searchPurpose.value = purpose
   recoveryBusy.value = true; recoveryError.value = ''; recoveryReviewed.value = false
@@ -35,6 +36,7 @@ async function reviewRecovery(purpose: 'recovery' | 'validation_optimization' = 
   finally { recoveryBusy.value = false }
 }
 async function startRecovery() {
+  if (props.readOnly) return
   if (recoveryBusy.value || !(searchPurpose.value === 'recovery' ? canReviewRecovery.value : canReviewOptimization.value) || !recoveryReviewed.value || !approvedPlans.value.length) return
   const datasets = approvedPlans.value.map(plan => plan.dataset)
   if (!window.confirm(`确认批准${searchPurpose.value === 'recovery' ? '恢复搜索' : '验证集优化'}：${datasets.join('、')}？\n搜索记录保存在当前实验的“自动调参与修复”，不重跑基线、不新建实验、不覆盖其他结果。\n每个数据集最多 6 组、额外 30 分钟；只用验证集选参，不按测试集选参。\n复用当前环境，不安装依赖。`)) return
@@ -175,6 +177,7 @@ function hoverCurve(event: MouseEvent, key: string) {
   curveHover.value = { key, index: nearestSample(points, x) }
 }
 async function refreshPaperTargets() {
+  if (props.readOnly) return
   if (loadingPaperTargets.value) return
   loadingPaperTargets.value = true; paperTargetReason.value = ''
   try {
@@ -213,6 +216,7 @@ async function loadAblations() {
   } catch (err) { ablationReason.value = (err as Error).message }
 }
 async function startAblation() {
+  if (props.readOnly) return
   const item = ablationOptions.value.find(option => `${option.dataset}|${option.flag}` === selectedAblation.value)
   if (!item || startingAblation.value || !window.confirm(`运行 ${item.dataset} 的 ${item.flag} 消融实验？将使用当前项目独立环境和作者原生开关。`)) return
   startingAblation.value = true
@@ -223,14 +227,14 @@ async function startAblation() {
   } catch (err) { loadError.value = (err as Error).message }
   finally { startingAblation.value = false }
 }
-onMounted(() => { refresh(); loadAblations(); if (!Object.keys(props.run.paper_spec.target_results || {}).length && !props.run.paper_spec.target_results_checked_at) refreshPaperTargets(); timer = window.setInterval(refresh, 4000) })
+onMounted(() => { refresh(); loadAblations(); if (!props.readOnly) { if (!Object.keys(props.run.paper_spec.target_results || {}).length && !props.run.paper_spec.target_results_checked_at) refreshPaperTargets(); timer = window.setInterval(refresh, 4000) } })
 onUnmounted(() => { if (timer) window.clearInterval(timer) })
-watch(() => props.run.id, () => { selectedDataset.value = ''; selectedAttempt.value = ''; paperTargetOverride.value = null; paperTargetReason.value = ''; refresh(); loadAblations(); if (!Object.keys(props.run.paper_spec.target_results || {}).length && !props.run.paper_spec.target_results_checked_at) refreshPaperTargets() })
+watch(() => props.run.id, () => { selectedDataset.value = ''; selectedAttempt.value = ''; paperTargetOverride.value = null; paperTargetReason.value = ''; refresh(); loadAblations(); if (!props.readOnly && !Object.keys(props.run.paper_spec.target_results || {}).length && !props.run.paper_spec.target_results_checked_at) refreshPaperTargets() })
 watch(selectedDataset, chooseDefaultAttempt)
 </script>
 
 <template>
-  <section id="experiment" class="experiment-dashboard">
+  <section id="experiment" class="experiment-dashboard" :class="{ 'read-only': readOnly }">
     <div class="section-title-row compact"><div><span class="kicker">实验观测</span><h2>实验过程与结果</h2></div><small>{{ run.status === 'executing' ? '每 4 秒读取实际日志' : '来自实际运行记录' }}</small></div>
     <div class="experiment-kpis"><article><small>本次批准的数据集</small><strong>{{ results.length }} / {{ approvedDatasets.length || '—' }}</strong></article><article><small>已取得最终结果</small><strong>{{ results.filter(item => Object.keys(item.metrics).length).length }}</strong><small>当前曲线 {{ trainingSamples }} 个真实采样点</small></article><article><small>修复 / 调参</small><strong>{{ repairs }} / {{ tunings.length }}</strong></article><article><small>累计执行时间</small><strong>{{ elapsed ? `${Math.round(elapsed)} 秒` : '—' }}</strong></article></div>
     <div v-if="loadError" class="alert error">{{ loadError }}</div>

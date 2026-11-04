@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from .models import ArtifactKind, ReproductionStatus
 
@@ -48,6 +48,11 @@ class ReproductionRead(BaseModel):
     updated_at: datetime
     approved_at: datetime | None
     completed_at: datetime | None
+
+    @field_serializer('logs')
+    def readable_logs(self, value: str) -> str:
+        from .services.terminal_output import readable_output
+        return readable_output(value)
 
 
 class ArtifactRead(BaseModel):
