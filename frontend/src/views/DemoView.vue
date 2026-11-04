@@ -80,13 +80,13 @@ watch(() => [route.params.id, route.query.run, route.query.stage], load, { immed
         <details><summary>查看准备阶段的真实时间记录</summary><p v-for="(event, index) in run.events.filter(item => !['executing', 'completed', 'result_verification'].includes(item.stage))" :key="index">{{ new Date(event.time).toLocaleString('zh-CN') }}　{{ event.message }}</p></details>
       </section>
       <section v-else-if="active.id === 'execution'" class="demo-content">
-        <h2>执行命令与训练日志</h2><pre>{{ run.execution_command.display }}</pre><p>以下为该实验保存的实际输出。</p><pre class="demo-log">{{ run.logs || '该记录尚未产生运行日志。' }}</pre>
+        <h2>执行命令与训练日志</h2><pre>{{ run.execution_command.display }}</pre><p>以下为保存日志的末尾，便于直接查看训练与测试结果。</p><pre class="demo-log">{{ run.logs.slice(-14000) || '该记录尚未产生运行日志。' }}</pre><details><summary>完整运行日志</summary><pre>{{ run.logs }}</pre></details>
       </section>
       <section v-else-if="active.id === 'coding'" class="demo-content">
         <h2>代码修改与校验</h2><p v-if="previewError" role="alert">{{ previewError }}</p>
-        <template v-if="preview"><h3>修改要求</h3><p>{{ preview.instruction }}</p><p>{{ preview.rationale }}</p><p v-if="preview.expected_observation">验收：{{ preview.expected_observation }}</p><details v-for="(diff, file) in preview.diffs" :key="file" open><summary>{{ file }}</summary><pre>{{ diff }}</pre></details><h3>Agent 协作记录</h3><pre>{{ pretty(preview.coding_trace) }}</pre></template>
+        <template v-if="preview"><h3>修改要求</h3><p>{{ preview.instruction }}</p><details v-for="(diff, file) in preview.diffs" :key="file" open><summary>{{ file }}</summary><pre>{{ diff }}</pre></details><p v-if="preview.run_id"><RouterLink class="button secondary" :to="`/projects/${project.id}?run=${preview.run_id}`" target="_blank">查看修改后的独立实验</RouterLink></p><h3>Agent 协作记录</h3><ul class="demo-agents"><li v-for="(item, index) in preview.coding_trace || []" :key="index"><strong>{{ item.agent }}</strong><span>{{ item.status === 'completed' ? '已通过' : item.status }}</span><small>{{ item.model }}</small></li></ul><details><summary>修改依据与验收条件</summary><p>{{ preview.rationale }}</p><p>{{ preview.expected_observation }}</p></details><details><summary>完整协作记录</summary><pre>{{ pretty(preview.coding_trace) }}</pre></details></template>
         <p v-else-if="!previewError">此记录没有保存代码修改方案。请先在工作台完成一次真实修改，再准备本阶段页面。</p>
-        <h3>已保存的修改记录</h3><pre>{{ pretty(run.result_json.code_revisions || run.result_json.revision || run.result_json.branch || []) }}</pre>
+        <details><summary>已保存的修改记录</summary><pre>{{ pretty(run.result_json.code_revisions || run.result_json.revision || run.result_json.branch || []) }}</pre></details>
       </section>
       <section v-else class="demo-content"><h2>实验结果、曲线与报告</h2><a v-if="run.result_json.report_path" class="button secondary" :href="api.reproductionReportUrl(project.id, run.id)" download>下载复现报告</a><ExperimentDashboard :key="run.id" :run="run" read-only /></section>
     </template>
@@ -95,4 +95,5 @@ watch(() => [route.params.id, route.query.run, route.query.stage], load, { immed
 
 <style scoped>
 .demo-view{max-width:1280px;margin:auto;padding:32px}.demo-header{display:flex;justify-content:space-between;gap:24px;align-items:center}.demo-header h1{margin:16px 0}.demo-header p,.demo-record{color:var(--text-muted,#607d8b)}.demo-record{display:flex;gap:24px;padding:14px 0;flex-wrap:wrap}.demo-nav{display:flex;gap:12px;border-block:1px solid #dce5eb;padding:16px 0;margin:12px 0 24px;flex-wrap:wrap}.demo-nav a{padding:8px 12px}.demo-nav a[aria-current=page]{background:#e4f1fb;color:#0053a3;font-weight:700;border-radius:6px}.demo-content,.demo-outline{background:var(--surface,#fff);padding:28px;border-radius:12px}.demo-outline li{display:flex;gap:28px;padding:20px 0;border-bottom:1px solid #e5ebef}.demo-outline li>a:first-child{flex:1;font-weight:600}.demo-content h3{margin-top:26px}.demo-content pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f7fa;padding:20px;border-radius:8px;line-height:1.65;max-height:60vh;overflow:auto;font-size:13px}.demo-content p{line-height:1.8}.demo-log{font-family:Consolas,monospace}.demo-content details{margin:16px 0}.demo-content :deep(.experiment-dashboard.read-only button){display:none}@media(max-width:760px){.demo-view{padding:16px}.demo-header{display:block}.demo-outline li{gap:12px;flex-wrap:wrap}.demo-content{padding:16px}}
+.demo-agents{list-style:none;padding:0}.demo-agents li{display:flex;align-items:baseline;gap:20px;padding:10px 0;border-bottom:1px solid #e5ebef;flex-wrap:wrap}.demo-agents small{color:#607d8b}
 </style>

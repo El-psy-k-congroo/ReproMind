@@ -647,6 +647,7 @@ def _recover_preview(workspace, base, source, include_applied=False):
                    for name,body in updated.items()):
                 continue
             return {'proposal_id':path.stem,'base_run_id':base.id,'files':files,
+                    'applied_at':saved.get('applied_at'), 'run_id':saved.get('run_id'),
                     'instruction':saved.get('instruction',''), 'rationale':saved.get('rationale',''),
                     'expected_observation':saved.get('expected_observation',''),
                     'coding_trace':saved.get('coding_trace',[]),
