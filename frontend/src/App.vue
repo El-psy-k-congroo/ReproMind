@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import type { ProjectListItem } from './types'
@@ -11,6 +11,11 @@ const router = useRouter()
 const projects = ref<ProjectListItem[]>([])
 const openProjectMenu = ref('')
 const sidebarError = ref('')
+const contextProjectId = computed(() => String(route.params.id || route.query.project || ''))
+watch([() => route.path, () => route.name], () => {
+  const title = ({ dashboard: '项目总览', agents: 'Agent 协作网络', models: '多模型调度', insights: '使用统计' } as Record<string, string>)[String(route.name)]
+  document.title = title ? `${title} · ReproMind` : 'ReproMind · 科研复现工作台'
+}, { immediate: true })
 async function refreshProjects() {
   if (!session.loaded || session.required && !session.user) { projects.value=[]; return }
   try { projects.value = await api.listProjects() } catch { /* Preserve the last successful project list. */ }
@@ -32,7 +37,7 @@ async function removeSidebarProject(item: ProjectListItem) {
 }
 const projectTarget = (section: string) => {
   const id = String(route.params.id || route.query.project || projects.value[0]?.id || '')
-  return id ? `/projects/${id}?section=${section}` : '/'
+  return id ? { path: `/projects/${id}`, query: { section, ...(route.query.run ? { run: route.query.run } : {}) } } : '/'
 }
 </script>
 
@@ -64,7 +69,7 @@ const projectTarget = (section: string) => {
           <span class="nav-symbol">▥</span> 使用统计
         </RouterLink>
         <RouterLink class="nav-item" :class="{ active: route.name === 'agents' }" :to="route.params.id || route.query.project ? `/agents?project=${route.params.id || route.query.project}` : '/agents'"><span class="nav-symbol">◈</span> Agent 协作网络</RouterLink>
-        <RouterLink class="nav-item" :class="{ active: route.name === 'models' }" to="/models"><span class="nav-symbol">⇄</span> 多模型调度</RouterLink>
+        <RouterLink class="nav-item" :class="{ active: route.name === 'models' }" :to="contextProjectId ? { path: '/models', query: { project: contextProjectId } } : '/models'"><span class="nav-symbol">⇄</span> 多模型调度</RouterLink>
       </nav>
 
       <div class="sidebar-projects">
@@ -72,7 +77,7 @@ const projectTarget = (section: string) => {
         <div v-for="item in projects.slice(0, 8)" :key="item.id" class="sidebar-project-row" :class="{ selected: route.params.id === item.id }">
           <RouterLink class="sidebar-project" :to="`/projects/${item.id}`" :title="item.name"><span>▣</span><span>{{ item.name }}</span></RouterLink>
           <button class="sidebar-project-more" :aria-label="`管理项目 ${item.name}`" @click="openProjectMenu = openProjectMenu === item.id ? '' : item.id">···</button>
-          <div v-if="openProjectMenu === item.id" class="sidebar-project-menu"><button @click="removeSidebarProject(item)">删除项目与独立环境</button></div>
+          <div v-if="openProjectMenu === item.id" class="sidebar-project-menu"><RouterLink :to="`/projects/${item.id}`" target="_blank" rel="noopener" @click="openProjectMenu = ''">新页面打开 ↗</RouterLink><button @click="removeSidebarProject(item)">删除项目与独立环境</button></div>
         </div>
         <small v-if="sidebarError" class="sidebar-error">{{ sidebarError }}</small>
         <small v-if="!projects.length" class="sidebar-empty">还没有项目</small>
@@ -92,7 +97,7 @@ const projectTarget = (section: string) => {
       </div>
     </aside>
     <main class="main-content">
-      <RouterView />
+      <RouterView :key="route.path" />
     </main>
   </div>
 </template>

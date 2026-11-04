@@ -241,6 +241,11 @@ a { color: inherit; text-decoration: none; }
 .project-card { cursor: default; position: relative; }.project-card.card-deleting { opacity: .55; pointer-events: none; }
 .project-card-link { display: block; width: 100%; min-height: 81px; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; color: inherit; }
 .project-card-link h3 { margin: 17px 0 8px; }.project-card-link p { height: 38px; overflow: hidden; margin: 0; color: #6c787d; font-size: 10px; line-height: 1.7; }
+.project-card-link { text-decoration: none; }
+.project-pages-hint { margin: 0 0 18px; font-size: 13px; line-height: 1.8; color: #63728a; }
+.project-new-page { display: inline-block; padding: 7px 10px; margin-top: 10px; border: 1px solid #ccd6e9; border-radius: 6px; font-size: 12px; text-decoration: none; color: #315cb5; }
+.project-new-page:hover { background: #eef3fd; }
+.sidebar-project-menu a { display: block; padding: 8px; font-size: 11px; text-decoration: none; color: #d5e5f7; }
 .card-menu-wrap,.model-menu-wrap { position: relative; }.card-menu-button { border: 0; background: transparent; color: #829391; cursor: pointer; padding: 4px 7px; letter-spacing: 3px; }
 .card-menu,.model-menu { position: absolute; z-index: 30; right: 0; top: 100%; min-width: 185px; padding: 5px; border: 1px solid #d4ddd7; border-radius: 7px; background: #fff; box-shadow: 0 12px 30px #1a363021; }
 .card-menu button,.model-menu button { display: flex; justify-content: space-between; width: 100%; padding: 10px 12px; border: 0; border-radius: 4px; background: transparent; text-align: left; color: #273b42; cursor: pointer; font-size: 11px; }.card-menu button:hover,.model-menu button:hover,.model-menu button.selected { background: #eef5f0; }

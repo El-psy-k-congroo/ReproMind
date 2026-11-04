@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import type { ProjectListItem, ReproductionRun } from '../types'
 
 const route = useRoute()
+const router = useRouter()
 const projects = ref<ProjectListItem[]>([])
 const projectId = ref(String(route.query.project || ''))
 const run = ref<ReproductionRun | null>(null)
@@ -60,6 +61,13 @@ async function refresh() {
     if (request === generation) { run.value = value; error.value = '' }
   } catch (err) { if (request === generation) { run.value = null; error.value = (err as Error).message } }
 }
+function selectProject() {
+  void router.replace({ query: { ...route.query, project: projectId.value || undefined } })
+}
+watch(() => route.query.project, () => {
+  projectId.value = String(route.query.project || '')
+  void refresh()
+})
 onMounted(async () => {
   try { projects.value = await api.listProjects() } catch (err) { error.value = (err as Error).message }
   await refresh()
@@ -70,7 +78,7 @@ onUnmounted(() => { generation++; window.clearInterval(timer) })
 
 <template>
   <section class="agents-page">
-    <header class="agents-heading"><div><span class="eyebrow">MULTI-AGENT SYSTEM</span><h1>Agent 协作网络</h1><p>从论文证据到可追溯实验，观察角色之间的交接与反馈。</p></div><div class="agents-controls"><label>项目状态<select v-model="projectId" aria-label="选择可视化项目" @change="refresh"><option value="">仅查看系统架构</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button class="button secondary" @click="moving = !moving">{{ moving ? '暂停动效' : '播放动效' }}</button></div></header>
+    <header class="agents-heading"><div><span class="eyebrow">MULTI-AGENT SYSTEM</span><h1>Agent 协作网络</h1><p>从论文证据到可追溯实验，观察角色之间的交接与反馈。</p></div><div class="agents-controls"><label>项目状态<select v-model="projectId" aria-label="选择可视化项目" @change="selectProject"><option value="">仅查看系统架构</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select></label><button class="button secondary" @click="moving = !moving">{{ moving ? '暂停动效' : '播放动效' }}</button></div></header>
     <p v-if="error" role="alert">{{ error }}</p>
     <div class="agents-orchestrator"><div><span class="agent-indicator"></span><strong>流程编排与权限门控</strong><small>项目隔离 · 源码快照 · 审批 · 证据记录</small></div><span v-if="run">任务 {{ run.id.slice(0, 8) }} · {{ run.status }} · {{ run.current_stage }}{{ run.result_json.tuning_active ? ' · 额外调参中' : '' }}</span><span v-else>架构视图 · 未读取活动实验</span></div>
     <div class="agents-layout">

@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import type { AnalyticsOverview, ProjectListItem } from '../types'
 
 const router = useRouter()
+const route = useRoute()
 const projects = ref<ProjectListItem[]>([])
 const overview = ref<AnalyticsOverview | null>(null)
 const loading = ref(true)
 const actionBusy = ref(false)
 const error = ref('')
-const showCreate = ref(false)
+const showCreate = ref(route.query.create === '1')
 const openMenu = ref<string | null>(null)
 const deletingId = ref<string | null>(null)
 const form = ref({ name: '', description: '', research_domain: '计算机科学' })
@@ -65,6 +66,7 @@ onMounted(load)
     <header class="topbar">
       <div><span class="kicker">RESEARCH OPERATIONS</span><h1>科研复现控制台</h1></div>
       <div class="top-actions">
+        <RouterLink class="button secondary" to="/?create=1" target="_blank" rel="noopener">新页面新建项目 ↗</RouterLink>
         <button class="button primary" @click="showCreate = true">新建复现项目</button>
       </div>
     </header>
@@ -102,6 +104,7 @@ onMounted(load)
         <div><span class="kicker">ACTIVE WORK</span><h2>最近项目</h2></div>
         <span class="section-note">按最近更新排序</span>
       </div>
+      <p class="project-pages-hint">点击“新页面打开”，可同时操作多个独立项目。演示前将不同项目分别准备到所需阶段，再切换标签页。</p>
       <div v-if="loading" class="empty-state"><span class="loader"></span><p>正在读取项目…</p></div>
       <div v-else-if="projects.length" class="project-grid">
         <article v-for="project in projects" :key="project.id" class="project-card" :class="{ 'card-deleting': deletingId === project.id }">
@@ -109,7 +112,8 @@ onMounted(load)
             <span class="domain-pill">{{ project.research_domain }}</span>
             <div class="card-menu-wrap"><button class="card-menu-button" aria-label="项目操作" :aria-expanded="openMenu === project.id" @click="openMenu = openMenu === project.id ? null : project.id">•••</button><div v-if="openMenu === project.id" class="card-menu"><button @click="router.push(`/projects/${project.id}`)">打开项目</button><button class="danger-text" @click="deleteProject(project)">删除项目与环境</button></div></div>
           </div>
-          <button class="project-card-link" @click="router.push(`/projects/${project.id}`)"><h3>{{ project.name }}</h3><p>{{ project.description || '尚未填写项目说明。' }}</p></button>
+          <RouterLink class="project-card-link" :to="`/projects/${project.id}`"><h3>{{ project.name }}</h3><p>{{ project.description || '尚未填写项目说明。' }}</p></RouterLink>
+          <RouterLink class="project-new-page" :to="`/projects/${project.id}`" target="_blank" rel="noopener" :aria-label="`新页面打开 ${project.name}`">新页面打开 ↗</RouterLink>
           <div class="project-progress">
             <div class="progress-label"><span>复现进度</span><strong>{{ project.latest_reproduction_progress ?? 0 }}%</strong></div>
             <div class="progress-track"><span :style="{ width: `${project.latest_reproduction_progress ?? 0}%` }"></span></div>

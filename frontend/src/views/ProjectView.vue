@@ -7,11 +7,14 @@ import ReproductionProgress from '../components/ReproductionProgress.vue'
 import ExperimentDashboard from '../components/ExperimentDashboard.vue'
 import ResearchCopilot from '../components/ResearchCopilot.vue'
 import type { ArtifactKind, ModelCatalog, Project, ReproductionRun } from '../types'
-import { demoLink, resolveRunId } from '../demoStages'
+import { resolveRunId } from '../demoStages'
 
 const route = useRoute()
 const router = useRouter()
 const project = ref<Project | null>(null)
+watch(() => project.value?.name, () => {
+  if (project.value) document.title = `${project.value.name} · ${project.value.id.slice(0, 8)} · ReproMind`
+})
 const loading = ref(true)
 const uploading = ref(false)
 const error = ref('')
@@ -32,6 +35,7 @@ const showModelMenu = ref(false)
 const workbench = ref<HTMLElement | null>(null)
 const chatWidth = ref(Number(window.localStorage.getItem('repromind-chat-width')) || 430)
 let reproductionTimer: number | undefined
+let disposed = false
 
 const kindMeta: Record<ArtifactKind, { label: string; symbol: string }> = {
   paper: { label: '论文', symbol: 'P' },
@@ -123,7 +127,7 @@ let refreshingRun = false
 let nextPollAt = 0
 let pollFailures = 0
 async function refreshReproduction() {
-  if (!project.value || refreshingRun || Date.now() < nextPollAt) return
+  if (disposed || !project.value || refreshingRun || Date.now() < nextPollAt) return
   const projectId = project.value.id
   refreshingRun = true
   try {
@@ -175,6 +179,7 @@ function copilotRunUpdated(run: ReproductionRun) {
 }
 
 function startReproductionPolling() {
+  if (disposed) return
   stopReproductionPolling()
   nextPollAt = 0
   reproductionTimer = window.setInterval(refreshReproduction, 1500)
@@ -283,19 +288,9 @@ onMounted(async () => {
   }
   await scrollToSection()
 })
-watch(() => route.params.id, async (id, oldId) => {
-  if (id === oldId) return
-  stopReproductionPolling()
-  reproduction.value = null
-  selectedRunId.value = ''
-  await load()
-  await refreshReproduction()
-  if (runHistory.value.some(item => ['queued', 'running', 'executing'].includes(item.status) || item.auxiliary_active)) startReproductionPolling()
-  await scrollToSection()
-})
 watch(() => route.query.section, scrollToSection)
 watch(() => route.query.run, () => { void refreshReproduction() })
-onUnmounted(stopReproductionPolling)
+onUnmounted(() => { disposed = true; stopReproductionPolling() })
 </script>
 
 <template>
@@ -317,7 +312,7 @@ onUnmounted(stopReproductionPolling)
         <div class="model-menu-wrap"><button class="model-menu-trigger" :aria-expanded="showModelMenu" @click="showModelMenu = !showModelMenu"><span>模型</span><strong>{{ selectedModel }}</strong><b>⌄</b></button><div v-if="showModelMenu" class="model-menu"><small>新复现任务使用此模型</small><button v-for="model in modelCatalog?.models || [{ id: selectedModel, label: selectedModel }]" :key="model.id" :class="{ selected: selectedModel === model.id }" @click="selectedModel = model.id; showModelMenu = false">{{ model.label }}<span v-if="selectedModel === model.id">✓</span></button></div></div>
         <button class="button secondary" @click="uploadKind = 'paper'; showUpload = !showUpload">＋ 添加证据</button>
         <button class="button secondary" @click="showCopilot = true">复现协作</button>
-        <RouterLink v-if="reproduction" class="button secondary" :to="demoLink(project.id, reproduction.id)" target="_blank">五分钟演示</RouterLink>
+        <RouterLink class="button secondary" to="/" target="_blank" rel="noopener">另开项目页面 ↗</RouterLink>
         <button v-if="reproduction && (['queued', 'running', 'executing'].includes(reproduction.status) || (!!reproduction.result_json.ablation_active || !!reproduction.result_json.tuning_active) && reproduction.status === 'completed')" class="button secondary" @click="pauseReproduction">暂停任务</button>
         <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">恢复任务</button>
         <button class="button ghost danger-text" :disabled="deletingProject" @click="deleteCurrentProject">{{ deletingProject ? '正在删除项目与环境…' : '删除项目' }}</button>

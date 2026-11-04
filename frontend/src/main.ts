@@ -6,6 +6,7 @@ import ProjectView from './views/ProjectView.vue'
 import InsightsView from './views/InsightsView.vue'
 import './styles.css'
 import { loadSession, session, startup } from './session'
+import { recoverRouteImport } from './routeRecovery'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -21,6 +22,17 @@ const router = createRouter({
     { path: '/agents', name: 'agents', component: () => import('./views/AgentsView.vue') },
     { path: '/models', name: 'models', component: () => import('./views/ModelsView.vue') },
   ],
+})
+
+router.onError((error, to) => {
+  // Access sessionStorage lazily: browser privacy settings may deny it.
+  const storage = {
+    getItem: (key: string) => window.sessionStorage.getItem(key),
+    setItem: (key: string, value: string) => window.sessionStorage.setItem(key, value),
+  }
+  const result = recoverRouteImport(error, to.fullPath, storage, target => window.location.assign(target))
+  if (result === 'failed') startup.error = '页面资源加载失败，请检查服务后点击“重新连接”。'
+  if (result === 'unrelated') startup.error = '页面打开失败，请点击“重新连接”后重试。'
 })
 
 router.beforeEach(async to => {

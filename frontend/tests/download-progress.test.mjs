@@ -9,14 +9,20 @@ const javascript = ts.transpileModule(source, { compilerOptions: { target: ts.Sc
 const helper = fs.readFileSync(new URL('../src/demoStages.ts', import.meta.url), 'utf8')
 const helperJs = ts.transpileModule(helper, { compilerOptions: { module: ts.ModuleKind.ES2022 } }).outputText
 const {resolveRunId} = await import(`data:text/javascript;base64,${Buffer.from(helperJs).toString('base64')}`)
-function fixture(api) {
-  const ctx = { api, project: {value:{id:'project'}}, selectedRunId:{value:'run'},
+function fixture(api, disposed = false) {
+  const ctx = { api, disposed, project: {value:{id:'project'}}, selectedRunId:{value:'run'},
     resolveRunId, route:{query:{}},
     runHistory:{value:[]}, reproduction:{value:{id:'run', marker:'existing'}}, error:{value:''},
     stopReproductionPolling:()=>{ctx.stopped++}, stopped:0 }
   const refresh = new Function(...Object.keys(ctx), `${javascript};return refreshReproduction`)(...Object.values(ctx))
   return {ctx,refresh}
 }
+
+test('a closed project page cannot resume background status polling', async()=>{
+  const f=fixture({listReproductionRuns:async()=>{assert.fail('closed page queried status')}}, true)
+  await f.refresh()
+  assert.equal(f.ctx.reproduction.value.marker,'existing')
+})
 
 test('slow status requests cannot pile up and duplicate polling', async()=>{
   let resolve, calls=0
