@@ -92,8 +92,8 @@ export const api = {
     request<{ proposal_id: string; status: string; files: string[]; message: string }>(`/projects/${projectId}/reproductions/${runId}/revisions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposal_id: proposalId }),
     }),
-  savedBranchPreview: (projectId: string, runId: string) =>
-    request<{ proposal_id: string; base_run_id: string; instruction: string; files: string[]; diffs: Record<string, string>; rationale: string; expected_observation: string; coding_trace?: Array<{ agent: string; model: string; files?: string[]; status: string }> } | null>(`/projects/${projectId}/reproductions/${runId}/branch-preview`),
+  savedBranchPreview: (projectId: string, runId: string, includeApplied = false) =>
+    request<{ proposal_id: string; base_run_id: string; instruction: string; files: string[]; diffs: Record<string, string>; rationale: string; expected_observation: string; coding_trace?: Array<{ agent: string; model: string; files?: string[]; status: string }> } | null>(`/projects/${projectId}/reproductions/${runId}/branch-preview${includeApplied ? '?include_applied=true' : ''}`),
   pendingRevision: (projectId: string, runId: string) =>
     request<{ proposal_id: string; files: string[]; instruction: string; applied_at: string } | null>(`/projects/${projectId}/reproductions/${runId}/pending-revision`),
   revisionRunPlan: (projectId: string, runId: string, proposalId: string) =>

@@ -30,7 +30,7 @@ async function load() {
     if (token !== generation) return
     project.value = p; run.value = r
     if (route.query.stage === 'coding') {
-      try { const saved = await api.savedBranchPreview(id, runId); if (token === generation) preview.value = saved }
+      try { const saved = await api.savedBranchPreview(id, runId, true); if (token === generation) preview.value = saved }
       catch (err) { if (token === generation) previewError.value = (err as Error).message }
     }
   } catch (err) { if (token === generation) error.value = (err as Error).message }
@@ -88,7 +88,7 @@ watch(() => [route.params.id, route.query.run, route.query.stage], load, { immed
         <p v-else-if="!previewError">此记录没有保存代码修改方案。请先在工作台完成一次真实修改，再准备本阶段页面。</p>
         <h3>已保存的修改记录</h3><pre>{{ pretty(run.result_json.code_revisions || run.result_json.revision || run.result_json.branch || []) }}</pre>
       </section>
-      <section v-else class="demo-content"><h2>实验结果、曲线与报告</h2><ExperimentDashboard :key="run.id" :run="run" read-only /></section>
+      <section v-else class="demo-content"><h2>实验结果、曲线与报告</h2><a v-if="run.result_json.report_path" class="button secondary" :href="api.reproductionReportUrl(project.id, run.id)" download>下载复现报告</a><ExperimentDashboard :key="run.id" :run="run" read-only /></section>
     </template>
   </main>
 </template>

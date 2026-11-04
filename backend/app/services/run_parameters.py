@@ -1,5 +1,6 @@
 """Preserve recorded per-dataset CLI overrides across reviewed reruns."""
 import ast
+import copy
 import math
 import re
 from pathlib import Path
@@ -67,6 +68,72 @@ def changed_cli_parameters(proposal):
         new = _cli_defaults(str(row.get('new_text', '')))
         changed.update(key for key in old.keys() | new.keys() if old.get(key) != new.get(key))
     return changed
+
+
+def reviewed_execution_plan(planned, source, entrypoints, changed, revisions=None):
+    """Bind reviewed CLI default edits after baseline goal/paper flags are generated.
+
+    This pure projection is shared by semantic review and the actual executor.
+    Historical commands and goals remain untouched.
+    """
+    result = copy.deepcopy(planned)
+    changed = set(changed)
+    if not changed:
+        return result
+    from .source_selection import native_path
+    source = native_path(source)
+    revisions = revisions or {}
+    for command in result.get('commands', []):
+        argv = list(command.get('argv') or [])
+        script = (str(argv[2]).replace('.', '/')+'.py' if len(argv)>2 and argv[1]=='-m'
+                  else str(argv[1]) if len(argv)>1 else '')
+        candidates = [script, *(name for name in entrypoints or [] if Path(name).name == Path(script).name)]
+        entry = next(((source/name).resolve() for name in candidates
+                      if source in (source/name).resolve().parents and (source/name).is_file()), None)
+        if entry is None:
+            raise ValueError('修改参数缺少可核验的作者入口，不能推导新执行命令')
+        from .source_selection import entry_sources
+        paths = entry_sources(source, [entry.relative_to(source).as_posix()])
+        defaults = {}
+        for path in reversed(paths):
+            name = path.relative_to(source).as_posix()
+            body = revisions.get(name, path.read_text(encoding='utf-8', errors='replace'))
+            tree = ast.parse(body)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                key, value = '', None
+                if node.func.attr.startswith('DEFINE_') and len(node.args)>=2 and isinstance(node.args[0], ast.Constant):
+                    key, value = str(node.args[0].value), node.args[1]
+                elif node.func.attr=='add_argument':
+                    options = [arg.value[2:] for arg in node.args if isinstance(arg, ast.Constant)
+                               and isinstance(arg.value, str) and arg.value.startswith('--')]
+                    key = options[0] if options else ''
+                    value = next((kw.value for kw in node.keywords if kw.arg=='default'), None)
+                if key not in changed or value is None:
+                    continue
+                try:
+                    scalar = ast.literal_eval(value)
+                except (ValueError, TypeError):
+                    continue
+                if scalar is None or type(scalar) in {str, bool, int, float}:
+                    if type(scalar) is float and not math.isfinite(scalar):
+                        raise ValueError('修改后的参数不是有限值，不能运行')
+                    defaults[key] = scalar
+        missing = changed-defaults.keys()
+        if missing:
+            raise ValueError('修改后的CLI默认值无法静态核验：'+', '.join(sorted(missing)))
+        positions = _leading_positionals(argv)
+        launcher, options = _options(argv, positions)
+        for key, value in defaults.items():
+            if value is None or type(value) is bool:
+                options.pop(key, None)  # Preserve each author's boolean switch syntax.
+            else:
+                options[key] = ['--'+key, str(value)]
+        command['argv'] = [*launcher, *(token for tokens in options.values() for token in tokens)]
+        command['reviewed_parameter_overrides'] = defaults
+        command['user_parameter_overrides'] = {**command.get('user_parameter_overrides', {}), **defaults}
+    return result
 
 
 def effective_numeric_parameters(source, entrypoints, argv):

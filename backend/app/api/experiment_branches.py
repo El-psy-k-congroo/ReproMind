@@ -36,7 +36,7 @@ from ..services.runtime_evidence import probe_framework, probe_interpreter, exec
 from ..services.environment_recovery import pytorch_cuda_plan
 from ..services.dataset_discovery import inspect_local_datasets
 from ..services.experiment_scope import revision_scope
-from ..services.run_parameters import inherit_dataset_parameters, changed_cli_parameters, historical_parameter_context
+from ..services.run_parameters import inherit_dataset_parameters, changed_cli_parameters, historical_parameter_context, reviewed_execution_plan
 from ..services.gpu_preparation import source_bodies, source_framework, tensorflow_gpu_plan, tensorflow_compat_changes, requested_framework, gpu_preparation_state
 from ..services.editable_source import editable_file, requirements_file, validate_requirements
 
@@ -443,6 +443,7 @@ def _fresh_run_command(base: ReproductionJob, source: Path, run_workspace: Path,
     try:
         planned = inherit_dataset_parameters(base, planned, source, changed_parameters,
             fresh_output_roots=(run_workspace, run_workspace.parents[1] / 'outputs' / run_workspace.name[:8]))
+        planned = reviewed_execution_plan(planned, source, entrypoints, changed_parameters)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     planned["argv"] = planned["commands"][0]["argv"]
@@ -606,20 +607,35 @@ def _proposal(workspace: Path, job_id: str, proposal_id: str) -> tuple[Path, dic
     return path, json.loads(path.read_text(encoding="utf-8"))
 
 
-def _recover_preview(workspace, base, source):
-    """Recover a passed, unapplied proposal only while its source hashes match."""
+def _recover_preview(workspace, base, source, include_applied=False):
+    """Recover a pending preview, or hash-checked backup history when requested."""
     directory = workspace / 'runs' / base.id / 'proposals'
     if not directory.is_dir():
         return None
     for path in sorted(directory.glob('*.json'), key=lambda p:p.stat().st_mtime, reverse=True)[:30]:
         try:
             _, saved = _proposal(workspace, base.id, path.stem)
-            if saved.get('base_run_id') != base.id or saved.get('applied_at') or saved.get('run_id'):
+            if saved.get('base_run_id') != base.id:
+                continue
+            applied = bool(saved.get('applied_at') or saved.get('run_id'))
+            if applied and not include_applied:
                 continue
             files=saved.get('files') or []
             if not 1<=len(files)<=12:
                 continue
-            originals={name:_code_file(source,name).read_text(encoding='utf-8',errors='replace') for name in files}
+            if applied:
+                backup_root = (workspace/'runs'/base.id/'revisions'/path.stem/'original').resolve()
+                if workspace.resolve() not in backup_root.parents:
+                    raise ValueError('历史修改备份超出项目工作区')
+                originals = {}
+                for name in files:
+                    relative = Path(name)
+                    backup = (backup_root/relative).resolve()
+                    if relative.is_absolute() or '..' in relative.parts or backup_root not in backup.parents or not backup.is_file() or backup.is_symlink():
+                        raise ValueError('历史修改备份缺失或越界')
+                    originals[name] = backup.read_text(encoding='utf-8', errors='replace')
+            else:
+                originals={name:_code_file(source,name).read_text(encoding='utf-8',errors='replace') for name in files}
             if any(hashlib.sha256(body.encode()).hexdigest()!=saved.get('source_sha256',{}).get(name)
                    for name,body in originals.items()):
                 continue
@@ -642,10 +658,10 @@ def _recover_preview(workspace, base, source):
 
 
 @router.get('/{job_id}/branch-preview')
-async def saved_branch_preview(project_id: str, job_id: str, db: AsyncSession = Depends(get_db)) -> dict | None:
+async def saved_branch_preview(project_id: str, job_id: str, db: AsyncSession = Depends(get_db), include_applied: bool = False) -> dict | None:
     base=await _job(db,project_id,job_id)
     workspace,source=_scope(base)
-    return await asyncio.to_thread(_recover_preview,workspace,base,source)
+    return await asyncio.to_thread(_recover_preview,workspace,base,source,include_applied)
 
 
 @router.post("/{job_id}/revisions")

@@ -30,15 +30,19 @@ def apply_goal_parameters(source, entries, argv, goal):
         if option['kind'] in {'int','float'}:
             declarations.setdefault(name, 0 if option['kind']=='int' else 0.0)
     changes = {}
-    number = r'([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)'
+    numeric = r'[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?'
+    number = '('+numeric+')'
     for name, default in declarations.items():
         aliases = [re.escape(name), re.escape(name.replace('_','-'))]
         if name in {'epochs','epoch','n_epochs','num_train_epochs','max_epoch'}:
             aliases += [r'epochs?', '训练轮数', '轮数']
         if name in {'seed','random_seed','seeds','random_seeds'}:
             aliases += ['随机种子',r'seed']
+        if name in {'early_stopping','patience','early_stopping_patience'}:
+            aliases += ['早停窗口','早停数','早停轮数']
         term = '(?:'+'|'.join(aliases)+')'
-        matches = re.findall(r'(?<![A-Za-z0-9_])'+term+r'\s*(?:=|:|：|改为|改成|设为|设置为)\s*'+number, goal, re.I)
+        transition = r'(?:从|由|from)\s*'+numeric+r'\s*(?:增大为|增大到|增加到|提高到|减小为|减小到|降低到|调整为|调整到|改为|改成|变为|变成|到|至|to|->|→)'
+        matches = re.findall(r'(?<![A-Za-z0-9_])'+term+r'\s*(?:'+transition+r'|=|:|：|改为|改成|设为|设置为)\s*'+number, goal, re.I)
         if name in {'epochs','epoch','n_epochs','num_train_epochs','max_epoch'}:
             matches += re.findall(number+r'\s*(?:个|轮)?\s*(?:完整(?:的)?(?:训练)?\s*)?(?:epochs?|轮(?:训练|完整训练))', goal, re.I)
         if name in {'sample_sizes','samples_per_class','num_samples_per_class','n_shot','k_shot','shots_per_class'}:

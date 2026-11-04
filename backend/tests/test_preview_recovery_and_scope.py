@@ -41,6 +41,14 @@ def test_preview_survives_navigation_but_not_source_changes_or_application(tmp_p
     (source/'train.py').write_text(original)
     p.write_text(json.dumps({**saved,'applied_at':'already-applied'}))
     assert _recover_preview(tmp_path,base,source) is None
+    backup=tmp_path/'runs'/'run'/'revisions'/p.stem/'original'
+    backup.mkdir(parents=True);(backup/'train.py').write_text(original)
+    (source/'train.py').write_text('n=100\n')
+    historical=_recover_preview(tmp_path,base,source,include_applied=True)
+    assert '+n=2' in historical['diffs']['train.py'] and '-n=1' in historical['diffs']['train.py']
+    assert (source/'train.py').read_text()=='n=100\n'
+    (backup/'train.py').write_text('corrupt backup')
+    assert _recover_preview(tmp_path,base,source,include_applied=True) is None
 
 
 def test_archived_cuda_build_preserves_old_api_and_platform_abi():
