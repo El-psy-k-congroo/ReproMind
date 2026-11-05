@@ -118,9 +118,10 @@ def download(row, directory, opener, curl=None):
                 if curl:
                     header = chunks / (str(start) + '.headers')
                     result = subprocess.run([curl, '--noproxy', '*', '--silent', '--show-error', '--fail',
-                        '--connect-timeout', '10', '--max-time', '45', '--max-filesize', str(end - start + 1),
+                        '--connect-timeout', '10', '--max-time', '180', '--speed-time', '30', '--speed-limit', '1024',
+                        '--max-filesize', str(end - start + 1),
                         '--range', '{}-{}'.format(start, end), '--dump-header', str(header),
-                        '--output', str(target), row['url']], capture_output=True, timeout=50)
+                        '--output', str(target), row['url']], capture_output=True, timeout=185)
                     if result.returncode:
                         raise OSError(result.stderr.decode('utf-8', errors='replace')[-300:])
                     headers = header.read_text(encoding='iso-8859-1')

@@ -8,7 +8,7 @@ import { installationTransportFailed, installationIndexUnavailable, tensorflowFa
 import type { ReproductionActivity, ReproductionRun, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun; approving?: boolean }>()
-defineEmits<{ approve: [budget: number]; resume: []; uploadData: []; uploadCode: []; chooseRepository: [url: string]; continuePartial: [] }>()
+defineEmits<{ approve: [budget: number]; resume: []; repairEnvironment: []; uploadData: []; uploadCode: []; chooseRepository: [url: string]; continuePartial: [] }>()
 const enableTuning = ref(false)
 const tuningPlans = ref<TuningPlan[]>([])
 watch([() => props.run.id, () => props.run.status], async () => {
@@ -20,6 +20,11 @@ watch([() => props.run.id, () => props.run.status], async () => {
   catch { /* No plan means no optional tuning approval. */ }
 }, { immediate: true })
 const repositoryInput = ref('')
+const canRepairEnvironment = computed(() => {
+  const migration = props.run.environment_spec.gpu_environment_migration as { approved?: boolean; profile?: string } | undefined
+  return props.run.status === 'failed' && !!props.run.approved_at && migration?.approved && migration.profile === 'tensorflow-windows-2.10'
+})
+const environmentRepairComplete = computed(() => props.run.result_json.environment_repair?.state === 'completed')
 watch(() => props.run.id, () => { repositoryInput.value = props.run.repository_url || '' }, { immediate: true })
 
 const codingIssues = computed(() => {
@@ -158,8 +163,10 @@ const operationMinutes = computed(() => {
   return Number.isFinite(timestamp) ? Math.max(0, Math.floor((now.value - timestamp) / 60000)) : null
 })
 const currentOperation = computed(() => activity.value ? activity.value.operation : props.run.result_json.active_operation)
-const currentMessage = computed(() => props.run.status === 'paused' && activity.value?.worker_active === false
-  ? '任务已暂停，后台步骤已停止；已有数据和实验记录保留，不会自动恢复' : props.run.message)
+const currentMessage = computed(() => props.run.status === 'paused' && environmentRepairComplete.value
+  ? 'GPU 环境迁移和真实运算检查已完成，训练尚未启动'
+  : props.run.status === 'paused' && activity.value?.worker_active === false
+    ? '任务已暂停，后台步骤已停止；已有数据和实验记录保留，不会自动恢复' : props.run.message)
 const operationLabel = computed(() => currentOperation.value?.kind === 'dataset_download' || props.run.current_stage === 'data_downloading'
   ? '数据下载' : props.run.current_stage === 'environment_building' ? '环境构建命令' : '运行操作')
 const downloadProgress = computed(() => {
@@ -189,7 +196,7 @@ watch(() => props.run.id, () => { activity.value = null; activityUnavailable.val
 watch(() => props.run.status, refreshActivity)
 watch(() => props.run.code_spec.source_path || props.run.execution_command.pythonpath, refreshGpuReadiness)
 watch([() => props.run.status, () => props.run.current_stage, () => JSON.stringify(props.run.environment_spec.gpu_runtime_verified || null)], () => {
-  if (['executing', 'completed', 'failed'].includes(props.run.current_stage)) refreshGpuReadiness()
+  if (['executing', 'completed', 'failed'].includes(props.run.current_stage) || props.run.result_json.environment_repair?.state === 'completed') refreshGpuReadiness()
 })
 const percent = (value: number | null | undefined) => value === null || value === undefined ? '—' : `${(value * 100).toFixed(1)}%`
 const metricLabel = (key: string) => key === 'accuracy' ? '准确率' : key.toUpperCase()
@@ -301,7 +308,7 @@ const displayedError = computed(() => {
       <small v-else-if="!currentOperation">后端未提供当前操作和实时日志，无法确认下载或安装进度。这不代表已经完成，也不能据此认定没有错误。</small>
       <small v-else-if="!activity?.log_tail">当前命令尚无日志输出；依赖解析或下载可能暂时没有输出，请以实时日志为准。</small>
     </div>
-    <div v-if="run.status === 'paused'" class="operation-live"><strong>任务已暂停</strong><small>已完成的数据集结果会保留。若作者代码不支持断点续训，恢复后当前未完成的数据集将从头训练，而不是从暂停时的 Epoch 继续。</small></div>
+    <div v-if="run.status === 'paused'" class="operation-live"><strong>{{ environmentRepairComplete ? '环境迁移已完成，训练尚未启动' : '任务已暂停' }}</strong><small v-if="environmentRepairComplete">依赖检查和 GPU 实际运算已通过。点击“继续未完成实验”后才开始运行原实验。</small><small v-else>已完成的数据集结果会保留。若作者代码不支持断点续训，恢复后当前未完成的数据集将从头训练，而不是从暂停时的 Epoch 继续。</small></div>
 
     <section v-if="datasetResults.length" class="experiment-section">
       <div class="section-title-row compact"><div><span class="kicker">EXPERIMENT RESULTS</span><h3>逐数据集结果</h3></div><small>{{ completeCount }} / {{ datasetResults.length }} 组产生指标</small></div>
@@ -352,7 +359,7 @@ const displayedError = computed(() => {
       <button class="button primary" :disabled="approving" @click="$emit('approve', enableTuning ? 6 : 0)">{{ approving ? '正在启动…' : '批准执行全部实验' }}</button>
     </div>
 
-    <div v-if="run.error_message && !['awaiting_data', 'needs_input'].includes(run.status)" class="run-error"><strong>任务诊断</strong><span>{{ displayedError }}<br v-if="installFailureDetail">{{ installFailureDetail }}</span><button v-if="run.status === 'failed'" class="button secondary" @click="$emit('resume')">{{ installFailureDetail ? run.approved_at ? '重试环境准备并继续实验' : '检查环境后重试准备' : run.approved_at ? '继续未完成实验' : '继续作者源码复现准备' }}</button></div>
+    <div v-if="run.error_message && !['awaiting_data', 'needs_input'].includes(run.status)" class="run-error"><strong>任务诊断</strong><span>{{ displayedError }}<br v-if="installFailureDetail">{{ installFailureDetail }}</span><button v-if="canRepairEnvironment" class="button secondary" @click="$emit('repairEnvironment')">仅修复 GPU 环境（不启动训练）</button><button v-else-if="run.status === 'failed'" class="button secondary" @click="$emit('resume')">{{ installFailureDetail ? run.approved_at ? '重试环境准备并继续实验' : '检查环境后重试准备' : run.approved_at ? '继续未完成实验' : '继续作者源码复现准备' }}</button></div>
 
     <div v-if="reportReady" class="report-download">
       <div><strong>{{ run.result_json.reproduction_success ? '复现验证报告已生成' : '复现诊断报告已生成' }}</strong><span>包含结论核验、逐数据集指标、修复与调参记录，以及未完成原因。</span></div>

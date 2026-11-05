@@ -20,7 +20,7 @@ from ..models import ArtifactKind, Project, ReproductionJob, ReproductionStatus
 from ..schemas import ReproductionCreate, ReproductionRead
 from ..services.reproduction_engine import (
     clear_process_pause, execute_reproduction, has_active_work, prepare_reproduction, request_process_pause,
-    validate_repository_url,
+    validate_repository_url, repair_environment_only,
 )
 from ..services.telemetry import read_job_telemetry
 from ..services.ablations import discover_ablations, execute_ablation
@@ -557,6 +557,17 @@ async def resume_paused(
         raise HTTPException(status_code=409, detail="批准运行后已修改源码；不能用新代码覆盖原实验，请通过助手创建新实验记录")
     if has_active_work(job.id):
         raise HTTPException(status_code=409, detail="正在停止上一步骤，请稍后再恢复")
+    if (job.result_json or {}).get('environment_repair', {}).get('state') in {'queued', 'running', 'paused'}:
+        clear_process_pause(job.id)
+        job.status = ReproductionStatus.queued
+        job.current_stage = 'environment_building'
+        job.message = '继续修复 GPU 环境，本次不启动训练'
+        job.result_json = {**(job.result_json or {}), 'environment_repair': {
+            **(job.result_json or {}).get('environment_repair', {}), 'state': 'queued'}}
+        await db.commit()
+        await db.refresh(job)
+        background_tasks.add_task(repair_environment_only, job.id)
+        return job
     previous = str((job.result_json or {}).get("paused_from_status") or '')
     revision = (job.result_json or {}).get('revision') or (job.result_json or {}).get('rerun') or {}
     approved_revision = (bool(revision) and job.approved_at and (job.execution_command or {}).get('commands'))
@@ -628,6 +639,43 @@ async def approve_reproduction(
     await db.commit()
     await db.refresh(job)
     background_tasks.add_task(execute_reproduction, job.id)
+    return job
+
+
+@router.post("/{job_id}/repair-environment", response_model=ReproductionRead, status_code=status.HTTP_202_ACCEPTED)
+async def repair_environment(
+    project_id: str, job_id: str, background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> ReproductionJob:
+    job = await db.scalar(select(ReproductionJob).where(
+        ReproductionJob.id == job_id, ReproductionJob.project_id == project_id))
+    if not job:
+        raise HTTPException(status_code=404, detail='复现任务不存在')
+    migration = (job.environment_spec or {}).get('gpu_environment_migration') or {}
+    from ..services.gpu_preparation import TF_WINDOWS_PROFILE
+    if not job.approved_at or not migration.get('approved') or migration.get('profile') != TF_WINDOWS_PROFILE:
+        raise HTTPException(status_code=409, detail='当前任务没有已单独批准的 TensorFlow GPU 迁移方案')
+    if job.status not in {ReproductionStatus.failed, ReproductionStatus.paused} or has_active_work(job.id):
+        raise HTTPException(status_code=409, detail='请等待当前任务退出后修复环境')
+    project_jobs = (await db.scalars(select(ReproductionJob).where(ReproductionJob.project_id == project_id))).all()
+    active = any(item.status in {ReproductionStatus.queued, ReproductionStatus.running, ReproductionStatus.executing}
+                 or has_active_work(item.id) or (item.result_json or {}).get('tuning_active')
+                 or (item.result_json or {}).get('ablation_active') for item in project_jobs)
+    if active:
+        raise HTTPException(status_code=409, detail='项目已有活动任务，不能同时修改共享环境')
+    history = list((job.result_json or {}).get('environment_repair_history') or [])
+    history.append({'time': datetime.now(timezone.utc).isoformat(), 'status': job.status.value,
+                    'error_message': job.error_message, 'last_failure': (job.environment_spec or {}).get('last_failure')})
+    job.result_json = {**(job.result_json or {}), 'environment_repair_history': history,
+                       'environment_repair': {'state': 'queued', 'training_started': False}}
+    clear_process_pause(job.id)
+    job.status = ReproductionStatus.queued
+    job.current_stage = 'environment_building'
+    job.message = '正在修复已批准的 GPU 环境，本次不启动训练'
+    job.error_message = ''
+    await db.commit()
+    await db.refresh(job)
+    background_tasks.add_task(repair_environment_only, job.id)
     return job
 
 

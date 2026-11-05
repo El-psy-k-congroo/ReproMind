@@ -63,3 +63,23 @@ def test_bad_hash_does_not_publish_wheel(tmp_path):
     with pytest.raises(ValueError, match='SHA-256'):
         download(record(), tmp_path, opener)
     assert not (tmp_path / record()['filename']).exists()
+
+
+def test_slow_but_progressing_range_can_finish_while_stalls_remain_bounded(tmp_path, monkeypatch):
+    from pathlib import Path
+    payload=b'x'*(8*1024*1024)
+    calls=[]
+    def curl(command, **kwargs):
+        calls.append(command)
+        budget=int(command[command.index('--max-time')+1])
+        if budget < len(payload)/64_000:
+            return SimpleNamespace(returncode=28,stderr=b'Operation timed out')
+        assert int(command[command.index('--speed-time')+1])==30
+        assert int(command[command.index('--speed-limit')+1])<64_000
+        assert kwargs['timeout']>budget
+        Path(command[command.index('--dump-header')+1]).write_text(f'HTTP/1.1 206 Partial Content\nContent-Range: bytes 0-{len(payload)-1}/{len(payload)}\n')
+        Path(command[command.index('--output')+1]).write_bytes(payload)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr('app.services.registry_wheel_download.subprocess.run',curl)
+    result=download(record(payload),tmp_path,None,curl='curl.exe')
+    assert len(calls)==1 and result.read_bytes()==payload

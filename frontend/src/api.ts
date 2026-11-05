@@ -121,6 +121,8 @@ request<{ datasets: string[]; current_local_dataset_evidence?: Record<string, { 
     request<ReproductionRun>(`/projects/${projectId}/reproductions/${runId}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tuning_budget: tuningBudget }) }),
   resumeReproduction: (projectId: string, runId: string) =>
     request<ReproductionRun>(`/projects/${projectId}/reproductions/${runId}/resume`, { method: 'POST' }),
+  repairEnvironment: (projectId: string, runId: string) =>
+    request<ReproductionRun>(`/projects/${projectId}/reproductions/${runId}/repair-environment`, { method: 'POST' }),
   chooseRepositorySource: (projectId: string, runId: string, repositoryUrl: string) =>
     request<ReproductionRun>(`/projects/${projectId}/reproductions/${runId}/source-choice`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice: 'repository', repository_url: repositoryUrl }),

@@ -1,10 +1,14 @@
 """Scoped recovery from a failed local proxy, with the approved index unchanged."""
 from urllib.parse import urlparse
 from urllib.request import getproxies
+from pathlib import Path
 
 
 def direct_pip_retry(command, output):
-    if list(command[1:4]) != ['-m', 'pip', 'install'] or 'ProxyError' not in output:
+    pip_install = list(command[1:4]) == ['-m', 'pip', 'install']
+    registry_install = (len(command) >= 6 and command[-1] == '--install'
+                        and Path(command[1]).resolve() == Path(__file__).with_name('registry_wheel_download.py').resolve())
+    if not (pip_install or registry_install) or 'ProxyError' not in output:
         return None
     proxies = getproxies()
     endpoints = [urlparse(value if '://' in value else 'http://'+value)

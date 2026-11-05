@@ -102,6 +102,7 @@ export interface ReproductionRun {
   environment_spec: Record<string, unknown>
   dataset_spec: Record<string, unknown>
   result_json: Record<string, unknown> & {
+    environment_repair?: { state: 'queued' | 'running' | 'paused' | 'completed' | 'failed'; training_started?: boolean; completed_at?: string }
     report_path?: string
     reproduction_success?: boolean
     dataset_results?: DatasetResult[]

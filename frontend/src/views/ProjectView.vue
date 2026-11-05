@@ -209,6 +209,14 @@ async function resumeReproduction() {
   } catch (err) { error.value = (err as Error).message }
 }
 
+async function repairEnvironment() {
+  if (!project.value || !reproduction.value) return
+  try {
+    reproduction.value = await api.repairEnvironment(project.value.id, reproduction.value.id)
+    startReproductionPolling()
+  } catch (err) { error.value = (err as Error).message }
+}
+
 async function chooseRepository(repositoryUrl: string) {
   if (!project.value || !reproduction.value) return
   try { reproduction.value = await api.chooseRepositorySource(project.value.id, reproduction.value.id, repositoryUrl); startReproductionPolling() }
@@ -314,7 +322,7 @@ onUnmounted(() => { disposed = true; stopReproductionPolling() })
         <button class="button secondary" @click="showCopilot = true">复现协作</button>
         <RouterLink class="button secondary" to="/" target="_blank" rel="noopener">另开项目页面 ↗</RouterLink>
         <button v-if="reproduction && (['queued', 'running', 'executing'].includes(reproduction.status) || (!!reproduction.result_json.ablation_active || !!reproduction.result_json.tuning_active) && reproduction.status === 'completed')" class="button secondary" @click="pauseReproduction">暂停任务</button>
-        <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">恢复任务</button>
+        <button v-if="reproduction?.status === 'paused'" class="button secondary" @click="resumePaused">{{ reproduction.result_json.environment_repair?.state === 'completed' ? '继续未完成实验' : '恢复任务' }}</button>
         <button class="button ghost danger-text" :disabled="deletingProject" @click="deleteCurrentProject">{{ deletingProject ? '正在删除项目与环境…' : '删除项目' }}</button>
         <button class="button primary" :title="!project.artifacts.some(item => item.kind === 'paper') ? '请先上传论文，再启动复现' : ''" :disabled="startingReproduction || !project.artifacts.some(item => item.kind === 'paper') || runHistory.some(item => ['queued', 'running', 'executing'].includes(item.status))" @click="startReproduction">
           <span v-if="startingReproduction" class="loader small"></span>{{ startingReproduction ? '正在创建…' : '启动自主复现' }}
@@ -343,7 +351,7 @@ onUnmounted(() => { disposed = true; stopReproductionPolling() })
     </section>
 
     <div v-if="runHistory.length" class="run-history-strip"><label>实验记录 <select :value="selectedRunId" @change="selectRun(($event.target as HTMLSelectElement).value)"><option v-for="(item, index) in runHistory" :key="item.id" :value="item.id">{{ item.rerun ? `重跑 ${item.rerun.datasets.join('、')}${item.rerun.gpu_requested ? ' · GPU' : ''}` : item.revision ? `代码修改实验 · ${item.revision.title}` : item.branch ? `分支 · ${item.branch.title}` : `原实验 ${runHistory.length - index}` }} · {{ item.status }} · {{ item.id.slice(0, 8) }}</option></select></label><span v-if="reproduction?.result_json.rerun">当前查看独立重跑记录：{{ reproduction.result_json.rerun.datasets.join('、') }}；{{ reproduction.result_json.rerun.gpu_requested ? '要求 GPU，CUDA 不可用即停止' : '按现有环境运行' }}。基于 {{ reproduction.result_json.rerun.base_run_id.slice(0, 8) }}，可切回原实验。以下进度、图表及结果仅属于当前所选记录。</span><span v-else-if="reproduction?.result_json.revision">当前查看代码修改后的独立实验记录；复用同一 Conda 环境，可从列表切回原结果。以下进度和图表仅属于所选记录。</span><span v-else-if="reproduction?.result_json.branch">当前查看独立分支；基于 {{ String(reproduction.result_json.branch.base_run_id).slice(0, 8) }}。原实验可从列表切回。</span></div>
-    <ReproductionProgress v-if="reproduction" :run="reproduction" :approving="approvingReproduction" @approve="approveReproduction" @resume="resumeReproduction" @upload-data="openDatasetUpload" @upload-code="openCodeUpload" @choose-repository="chooseRepository" @continue-partial="continuePartial" />
+    <ReproductionProgress v-if="reproduction" :run="reproduction" :approving="approvingReproduction" @approve="approveReproduction" @resume="resumeReproduction" @repair-environment="repairEnvironment" @upload-data="openDatasetUpload" @upload-code="openCodeUpload" @choose-repository="chooseRepository" @continue-partial="continuePartial" />
     <button v-if="reproduction?.result_json.rerun && runHistory.some(item => item.id === reproduction?.result_json.rerun?.base_run_id)" class="button secondary" @click="selectRun(reproduction.result_json.rerun.base_run_id)">查看原实验完整结果（不重跑）</button>
     <ExperimentDashboard v-if="reproduction && (reproduction.approved_at || ['executing', 'completed'].includes(reproduction.status))" :run="reproduction" @ablation-started="startReproductionPolling" @recovery-started="branchStarted" />
 

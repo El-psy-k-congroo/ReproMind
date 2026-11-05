@@ -2916,12 +2916,12 @@ async def _run_environment_operation(session, job, workspace, command, timeout, 
             operation = {**operation, 'log_path': str(log_path), 'network_route': 'direct_local_proxy_retry'}
             job.result_json = {**(job.result_json or {}), 'active_operation': operation}
             await session.commit()
-            first_output = output
             code, retry_output = await _run_process(command, workspace, timeout, extra_env=direct, output_path=log_path)
-            output = first_output + '\n本机代理连接失败，对同一软件源直连重试（保持TLS校验）：\n' + retry_output
-            if code == 0:
-                job.result_json = {**(job.result_json or {}), 'pip_network_route': 'direct_local_proxy_retry'}
-                await session.commit()
+            # Both attempts keep separate logs. Diagnose the latest result;
+            # a stale ProxyError must not relabel a subsequent solver failure.
+            output = retry_output
+            job.result_json = {**(job.result_json or {}), 'pip_network_route': 'direct_local_proxy_retry'}
+            await session.commit()
         return code, output
     finally:
         # Preserve a bounded tail on pause/error as well as normal completion.
@@ -3322,15 +3322,14 @@ async def _prepare_pytorch_gpu(session, job, workspace, env_python, spec):
         return
 
 
-async def _recover_environment_operation(session, job, workspace, command, log, kind, step, total_steps):
+async def _recover_environment_operation(session, job, workspace, command, log, kind, step, total_steps, timeout=None):
     """Retry transport errors once. Compatibility/conflict errors never repeat blindly."""
-    code, output = await _run_environment_operation(session, job, workspace, command,
-        180 if kind == 'pytorch_preflight' else max(2700, get_settings().reproduction_timeout_seconds),
+    budget = timeout if timeout is not None else (180 if kind == 'pytorch_preflight' else max(2700, get_settings().reproduction_timeout_seconds))
+    code, output = await _run_environment_operation(session, job, workspace, command, budget,
         log, kind=kind, step=step, total_steps=total_steps)
     if code and failure_kind(code, output) == 'network':
         await _advance(session, job, 'environment_building', 86, 'Environment Recovery：临时网络错误，有限重试 1/1；不更换不可信下载源')
-        code, retry = await _run_environment_operation(session, job, workspace, command,
-            180 if kind == 'pytorch_preflight' else max(2700, get_settings().reproduction_timeout_seconds),
+        code, retry = await _run_environment_operation(session, job, workspace, command, budget,
             log.with_name(log.stem + '-retry.log'),
             kind=kind + '_retry', step=step, total_steps=total_steps)
         # Classify the latest outcome, not a stale transport error from the first try.
@@ -3395,10 +3394,9 @@ async def _prepare_tensorflow_gpu(session, job, workspace, env_python, spec):
             if installed_cuda and index < 2:
                 continue
             timeout = 180 if index == 0 else 2700
-            code, output = await _run_environment_operation(
-                session, job, workspace, command, timeout,
-                operations / f'tensorflow-migration-{index + 1}.log',
-                kind='tensorflow_gpu_migration', step=index + 1, total_steps=len(commands),
+            code, output = await _recover_environment_operation(
+                session, job, workspace, command, operations / f'tensorflow-migration-{index + 1}.log',
+                kind='tensorflow_gpu_migration', step=index + 1, total_steps=len(commands), timeout=timeout,
             )
             if code != 0:
                 from .gpu_preparation import cuda_failure_detail
@@ -3431,6 +3429,67 @@ async def _prepare_tensorflow_gpu(session, job, workspace, env_python, spec):
         spec.setdefault('previous_compatibility_note', spec.get('compatibility_note', ''))
         spec['compatibility_note'] = (f"当前 TensorFlow {verified.get('version')} GPU 运算预检通过；"
                                       '经单独批准复用并检查项目环境，源码保留 compat.v1 图模式；训练结果另行验证。')
+
+
+async def repair_environment_only(job_id: str) -> None:
+    """Resume an approved GPU migration and stop before any experiment command."""
+    if has_active_work(job_id):
+        return
+    _begin_work(job_id)
+    token = CURRENT_JOB_ID.set(job_id)
+    workspace_token = current_workspace.set(None)
+    try:
+        async with AsyncSessionLocal() as session:
+            job = await session.scalar(select(ReproductionJob).where(ReproductionJob.id == job_id))
+            if job is None or job.status != ReproductionStatus.queued or (job.result_json or {}).get('environment_repair', {}).get('state') != 'queued':
+                return
+            workspace = Path(job.workspace_path).resolve()
+            current_workspace.set(workspace)
+            spec = dict(job.environment_spec or {})
+            prefix = Path(str(spec.get('prefix') or ''))
+            env_python = prefix / ('python.exe' if os.name == 'nt' else 'bin/python')
+            try:
+                job.result_json = {**(job.result_json or {}), 'environment_repair': {
+                    **(job.result_json or {}).get('environment_repair', {}), 'state': 'running'}}
+                await _advance(session, job, 'environment_building', 86,
+                               '正在修复已批准的 GPU 环境，本次不启动训练', status=ReproductionStatus.running)
+                await _prepare_tensorflow_gpu(session, job, workspace, env_python, spec)
+                # GPU availability can skip installation. Verify the dependency
+                # graph for that path too before accepting environment repair.
+                check_code, check_output = await _run_environment_operation(
+                    session, job, workspace, [str(env_python), '-m', 'pip', 'check'], 90,
+                    workspace / 'runs' / job.id / 'operations' / f'environment-repair-check-{time.time_ns()}.log',
+                    kind='environment_verification', step=1, total_steps=1)
+                if check_code:
+                    raise RuntimeError('GPU 环境依赖完整性检查未通过：' + check_output[-500:])
+                _raise_if_paused(job.id)
+                job.environment_spec = {**spec, 'gpu_recovery_pending': False}
+                job.error_message = ''
+                job.result_json = {**(job.result_json or {}), 'environment_repair': {
+                    **(job.result_json or {}).get('environment_repair', {}),
+                    'state': 'completed', 'completed_at': datetime.now(timezone.utc).isoformat(),
+                    'training_started': False},
+                    'paused_from_status': 'executing', 'paused_from_stage': 'environment_building'}
+                await _advance(session, job, 'paused', 86,
+                               'GPU 环境迁移和真实运算检查已完成；任务暂停，尚未重启训练', status=ReproductionStatus.paused)
+            except ReproductionPaused:
+                await session.refresh(job, attribute_names=['result_json'])
+                job.result_json = {**(job.result_json or {}), 'environment_repair': {
+                    **(job.result_json or {}).get('environment_repair', {}), 'state': 'paused'}}
+                job.status = ReproductionStatus.paused
+                job.current_stage = 'paused'
+                job.message = '环境修复已暂停，尚未启动训练'
+                await session.commit()
+            except Exception as exc:
+                job.environment_spec = spec
+                job.error_message = f'{type(exc).__name__}: {exc}'
+                job.result_json = {**(job.result_json or {}), 'environment_repair': {
+                    **(job.result_json or {}).get('environment_repair', {}), 'state': 'failed'}}
+                await _advance(session, job, 'failed', 86, '环境修复未完成；未启动训练', status=ReproductionStatus.failed)
+    finally:
+        current_workspace.reset(workspace_token)
+        CURRENT_JOB_ID.reset(token)
+        _end_work(job_id)
 
 
 def _missing_module(output: str) -> str:
