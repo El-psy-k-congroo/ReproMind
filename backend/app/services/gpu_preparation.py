@@ -1,5 +1,6 @@
 """Reviewable TensorFlow GPU preparation, never installs or edits source here."""
 import ast
+import json
 import os
 import re
 from urllib.parse import urlsplit, unquote
@@ -167,13 +168,47 @@ def tensorflow_compat_changes(bodies):
     return changes
 
 
+def parse_conda_output(output):
+    """Accept one complete JSON result, including Conda warning prefixes."""
+    if not isinstance(output, str):
+        raise ValueError('Conda 预检未返回完整 JSON；不会安装或修改环境')
+    text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', output).strip()
+    try:
+        result = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        starts = list(re.finditer(r'(?m)^\{', text))
+        if len(starts) != 1:
+            raise ValueError('Conda 预检未返回唯一完整 JSON；不会安装或修改环境') from exc
+        try:
+            result = json.loads(text[starts[0].start():])
+        except ValueError as parse_error:
+            raise ValueError('Conda 预检未返回完整 JSON；不会安装或修改环境') from parse_error
+    if not isinstance(result, dict):
+        raise ValueError('Conda 预检 JSON 必须是对象；不会安装或修改环境')
+    return result
+
+
+def cuda_failure_detail(output, kind):
+    if kind == 'index_unavailable':
+        return 'Conda 软件源索引未加载，CUDA 依赖可用性尚未核验。请获取软件源索引后重新预检；训练尚未启动。'
+    if kind == 'network':
+        return '访问软件源时网络、代理或 TLS 连接失败，环境准备未完成；训练尚未启动。'
+    try:
+        result = parse_conda_output(output)
+        packages = result.get('packages')
+        if kind == 'incompatible_package' and isinstance(packages, list):
+            return '当前软件源未找到依赖：' + '、'.join(str(value) for value in packages) + '。请核对软件源和版本后重新预检。'
+        message = result.get('message') or result.get('error')
+        if isinstance(message, str):
+            return message.split('\n\n')[0][:300]
+    except ValueError:
+        pass
+    return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', output).replace('\r', '\n')[-300:].strip()
+
+
 def validate_cuda_dependency_plan(output):
     """A successful solver exit is not permission to replace the shared environment."""
-    import json
-    try:
-        plan = json.loads(output)
-    except (TypeError, ValueError) as exc:
-        raise ValueError('Conda 预检未返回完整 JSON；不会安装或修改环境') from exc
+    plan = parse_conda_output(output)
     if not isinstance(plan, dict) or plan.get('success') is not True:
         raise ValueError('Conda 预检未确认成功；不会安装或修改环境')
     actions = plan.get('actions')

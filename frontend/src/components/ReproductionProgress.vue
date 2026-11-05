@@ -4,7 +4,7 @@ import { api } from '../api'
 import { runDatasetScope } from '../runScope'
 import { trainingDeviceLabel } from '../gpuEvidence'
 import { baselineComparison } from '../baselineComparison'
-import { installationTransportFailed } from '../environmentFailure'
+import { installationTransportFailed, installationIndexUnavailable, tensorflowFailureHeading } from '../environmentFailure'
 import type { ReproductionActivity, ReproductionRun, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun; approving?: boolean }>()
@@ -195,6 +195,9 @@ const percent = (value: number | null | undefined) => value === null || value ==
 const metricLabel = (key: string) => key === 'accuracy' ? '准确率' : key.toUpperCase()
 const metricValue = (value: number | null | undefined, key: string) => value === null || value === undefined ? '—' : ['accuracy', 'auc', 'auroc', 'aupr', 'f1', 'precision', 'recall'].includes(key) ? percent(value) : value.toFixed(4)
 const installFailureDetail = computed(() => {
+  if (props.run.status === 'failed' && installationIndexUnavailable(props.run.error_message, props.run.environment_spec.last_failure, props.run.logs)) {
+    return '上次预检没有加载 Conda 软件源索引，未完成 CUDA 与 cuDNN 版本的可用性核验。重试时会先获取索引并重新预检；此前失败发生在环境准备阶段，训练尚未启动。原依赖和快照保留。'
+  }
   if (props.run.status === 'failed' && installationTransportFailed(props.run.error_message, props.run.environment_spec.last_failure)) {
     return '依赖来源的网络、代理或 TLS 连接失败，未证明该版本与本机不兼容。请先核对连接后重试准备；不会据此更换 Python、框架或执行主机。实验尚未启动。'
   }
@@ -211,8 +214,7 @@ const installFailureDetail = computed(() => {
 })
 const displayedError = computed(() => {
   if (installFailureDetail.value && props.run.error_message.includes('TensorFlow 环境迁移')) {
-    const seconds = props.run.error_message.match(/(?:安装)?命令超过 (\d+) 秒/)?.[1]
-    return `TensorFlow GPU 环境安装超时${seconds ? `（${Math.round(Number(seconds) / 60)} 分钟）` : ''}，已停止安装，未启动训练。`
+    return tensorflowFailureHeading(props.run.error_message, props.run.environment_spec.last_failure, props.run.logs)
   }
   return props.run.error_message.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
 })
@@ -350,7 +352,7 @@ const displayedError = computed(() => {
       <button class="button primary" :disabled="approving" @click="$emit('approve', enableTuning ? 6 : 0)">{{ approving ? '正在启动…' : '批准执行全部实验' }}</button>
     </div>
 
-    <div v-if="run.error_message && !['awaiting_data', 'needs_input'].includes(run.status)" class="run-error"><strong>任务诊断</strong><span>{{ displayedError }}<br v-if="installFailureDetail">{{ installFailureDetail }}</span><button v-if="run.status === 'failed'" class="button secondary" @click="$emit('resume')">{{ installFailureDetail ? '检查环境后重试准备' : run.approved_at ? '继续未完成实验' : '继续作者源码复现准备' }}</button></div>
+    <div v-if="run.error_message && !['awaiting_data', 'needs_input'].includes(run.status)" class="run-error"><strong>任务诊断</strong><span>{{ displayedError }}<br v-if="installFailureDetail">{{ installFailureDetail }}</span><button v-if="run.status === 'failed'" class="button secondary" @click="$emit('resume')">{{ installFailureDetail ? run.approved_at ? '重试环境准备并继续实验' : '检查环境后重试准备' : run.approved_at ? '继续未完成实验' : '继续作者源码复现准备' }}</button></div>
 
     <div v-if="reportReady" class="report-download">
       <div><strong>{{ run.result_json.reproduction_success ? '复现验证报告已生成' : '复现诊断报告已生成' }}</strong><span>包含结论核验、逐数据集指标、修复与调参记录，以及未完成原因。</span></div>

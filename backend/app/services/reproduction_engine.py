@@ -3379,10 +3379,12 @@ async def _prepare_tensorflow_gpu(session, job, workspace, env_python, spec):
         pins = protected_conda_specs(snapshot['conda_explicit'])
         cuda_command = [conda, 'install', '--prefix', prefix, '--override-channels',
                         '-c', 'conda-forge', '-c', 'defaults', '--no-channel-priority',
-                        'cudatoolkit=11.2', 'cudnn=8.1.0', *pins, '--freeze-installed', '--use-index-cache']
+                        'cudatoolkit=11.2', 'cudnn=8.1.0', *pins, '--freeze-installed']
         commands = [
+            # A new channel can have no cached index. Fetch metadata during
+            # preflight, then reuse that index only after validating the plan.
             [*cuda_command, '--dry-run', '--json', '-y'],
-            [*cuda_command, '-y'],
+            [*cuda_command, '--use-index-cache', '-y'],
             [str(env_python), str(Path(__file__).with_name('registry_wheel_download.py')),
              'tensorflow', '2.10.0', str(workspace / 'downloads' / 'verified-wheels'), '--install'],
             [str(env_python), '-m', 'pip', 'check'],
@@ -3399,10 +3401,11 @@ async def _prepare_tensorflow_gpu(session, job, workspace, env_python, spec):
                 kind='tensorflow_gpu_migration', step=index + 1, total_steps=len(commands),
             )
             if code != 0:
-                clean_output = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', output).replace('\r', '\n')
+                from .gpu_preparation import cuda_failure_detail
+                kind = failure_kind(code, output)
                 detail = (f'环境命令超过 {timeout} 秒，依赖预检、下载或安装未完成；训练尚未启动'
-                          if code == 124 else clean_output[-300:].strip())
-                spec['last_failure'] = {'kind': 'timeout' if code == 124 else 'command_error',
+                          if code == 124 else cuda_failure_detail(output, kind))
+                spec['last_failure'] = {'kind': kind,
                                         'run_id': job.id, 'step': index + 1, 'return_code': code,
                                         'detail': detail, 'snapshot_path': str(snapshot_file)}
                 job.environment_spec = spec

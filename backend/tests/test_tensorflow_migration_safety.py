@@ -99,3 +99,56 @@ def test_retry_preserves_snapshot_and_requires_exact_inventory(tmp_path, monkeyp
         asyncio.run(engine._prepare_tensorflow_gpu(session, job, tmp_path, tmp_path / 'env' / 'python.exe', spec))
         assert len(calls) == 6 and spec['gpu_runtime_verified']['compute_checked']
     assert snapshot_file.read_text(encoding='utf-8') == original
+
+
+def test_cold_channel_cache_is_loaded_before_install_and_install_follows_verified_plan(tmp_path, monkeypatch):
+    session, job, spec, calls = setup_migration(tmp_path, monkeypatch)
+    original_process = engine._run_process
+    index_loaded = False
+    async def cold_cache(command, *args, **kwargs):
+        nonlocal index_loaded
+        if '--dry-run' in command:
+            if '--use-index-cache' in command:
+                return 1, 'WARNING: No repodata found for channel conda-forge.\n{"success":false,"exception_name":"PackagesNotFoundError"}'
+            index_loaded = True
+        elif command[:2] == ['conda.exe', 'install']:
+            assert index_loaded, 'installation started without obtaining channel metadata'
+            assert '--use-index-cache' in command
+        return await original_process(command, *args, **kwargs)
+    monkeypatch.setattr(engine, '_run_process', cold_cache)
+    asyncio.run(engine._prepare_tensorflow_gpu(session, job, tmp_path, tmp_path / 'env' / 'python.exe', spec))
+    assert index_loaded and spec['gpu_runtime_verified']['compute_checked']
+    assert '--use-index-cache' not in calls[2] and '--dry-run' in calls[2]
+    assert '--use-index-cache' in calls[3] and '--dry-run' not in calls[3]
+
+
+def test_warning_prefixed_unsafe_plan_still_blocks_real_install(tmp_path, monkeypatch):
+    session, job, spec, calls = setup_migration(tmp_path, monkeypatch, unsafe=True)
+    original_process = engine._run_process
+    async def warned_plan(command, *args, **kwargs):
+        code, output = await original_process(command, *args, **kwargs)
+        return code, 'WARNING conda: package metadata warning\n' + output if '--dry-run' in command else output
+    monkeypatch.setattr(engine, '_run_process', warned_plan)
+    with pytest.raises(RuntimeError, match='python'):
+        asyncio.run(engine._prepare_tensorflow_gpu(session, job, tmp_path, tmp_path / 'env' / 'python.exe', spec))
+    assert len(calls) == 3 and spec['last_failure']['kind'] == 'unsafe_dependency_plan'
+
+
+@pytest.mark.parametrize('payload', [None, 'WARNING solver\n{"success":true}\ntruncated',
+                                     'WARNING solver\n{"success":false}\n{"success":true,"actions":{}}'])
+def test_incomplete_or_multiple_conda_results_cannot_be_treated_as_success(payload):
+    with pytest.raises(ValueError):
+        validate_cuda_dependency_plan(payload)
+
+
+def test_missing_index_is_not_reported_as_an_incompatible_cuda_version():
+    from app.services.environment_recovery import failure_kind
+    from app.services.gpu_preparation import cuda_failure_detail
+    output = 'WARNING: No repodata found for channel conda-forge.\n{"exception_name":"PackagesNotFoundError","packages":["cudnn=8.1.0*"]}'
+    kind = failure_kind(1, output)
+    assert kind == 'index_unavailable'
+    assert '索引未加载' in cuda_failure_detail(output, kind)
+
+
+def test_warning_prefixed_success_is_accepted_with_protected_dependencies_unchanged():
+    validate_cuda_dependency_plan('WARNING conda: metadata notice\n{"success":true,"actions":{"LINK":[{"name":"cudnn"}]}}')

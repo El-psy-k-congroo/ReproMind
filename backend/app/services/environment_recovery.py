@@ -23,6 +23,8 @@ def failure_kind(code, output):
         return 'network'
     if code == 124:
         return 'timeout'
+    if re.search(r'No repodata found|repodata[^\n]*(?:not found|missing|unavailable)', output, re.I):
+        return 'index_unavailable'
     if re.search(r'No matching distribution|Could not find a version|Requires-Python|PackagesNotFoundError', output, re.I):
         return 'incompatible_package'
     if re.search(r'ResolutionImpossible|conflicting dependencies', output, re.I):
