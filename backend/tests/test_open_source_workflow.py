@@ -24,7 +24,7 @@ def test_same_named_repository_cache_requires_owner_identity(tmp_path, monkeypat
     (old / '.git' / 'config').write_text(
         '[remote "origin"]\nurl = https://github.com/other/model.git\n', encoding='utf-8')
 
-    async def clone(argv, *args):
+    async def clone(argv, *args, **kwargs):
         assert argv[:4] == ['git', 'clone', '--depth', '1']
         target = Path(argv[-1])
         target.mkdir(parents=True)

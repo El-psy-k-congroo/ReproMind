@@ -1,7 +1,9 @@
 """Bounded, verified downloads of public author repositories from GitHub."""
 import asyncio
 import hashlib
+import os
 import time
+import urllib.request
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -9,6 +11,34 @@ from urllib.parse import urlparse
 import httpx
 
 MAX_ARCHIVE_BYTES = 120_000_000
+
+
+def git_network_environment(use_system_proxy: bool, repository_url: str) -> dict[str, str]:
+    """Give this Git process the same proxy choice as the archive downloader."""
+    proxies = urllib.request.getproxies() if use_system_proxy else {}
+    proxy = proxies.get('https') or proxies.get('http') or proxies.get('all') or ''
+    if use_system_proxy and not proxy:
+        return {}
+    if proxy and '://' not in proxy:
+        proxy = 'http://' + proxy
+    # Environment-only Git configuration preserves global configuration and
+    # keeps any proxy credentials out of argv, progress messages and logs.
+    count = int(os.environ.get('GIT_CONFIG_COUNT') or 0)
+    settings = {
+        'http.proxy': proxy,
+        f'http.{repository_url.rstrip("/")}.proxy': proxy,
+        'http.lowSpeedLimit': '1024', 'http.lowSpeedTime': '12',
+    }
+    env = {}
+    for key, value in settings.items():
+        env[f'GIT_CONFIG_KEY_{count}'] = key
+        env[f'GIT_CONFIG_VALUE_{count}'] = value
+        count += 1
+    env['GIT_CONFIG_COUNT'] = str(count)
+    if not use_system_proxy:
+        env.update({key: '' for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')})
+        env.update(NO_PROXY='*', no_proxy='*')
+    return env
 
 
 class RepositoryDownloadError(RuntimeError):
@@ -41,7 +71,8 @@ async def download_github_archive(
     # No assumption about main/master, and no third-party mirrors or TLS bypass.
     endpoints = [f"https://codeload.github.com/{owner}/{repository}/zip/HEAD",
                  f"https://api.github.com/repos/{owner}/{repository}/zipball"]
-    attempts = [(url, mode) for url in endpoints for mode in (trust_env, False)]
+    modes = list(dict.fromkeys((trust_env, False)))
+    attempts = [(url, mode) for url in endpoints for mode in modes]
     terminal = set()
     diagnostics = []
     deadline = time.monotonic() + timeout_seconds
@@ -65,13 +96,18 @@ async def download_github_archive(
         if remaining <= 0:
             diagnostics.append("源码下载总时限已耗尽")
             break
+        remaining_attempts = sum(endpoint not in terminal for endpoint, _ in attempts[index-1:])
+        attempt_budget = remaining / remaining_attempts
         channel = "系统代理配置" if mode else "直连"
         await notify(f"正在获取作者默认分支源码包：{channel}，尝试 {index}/{len(attempts)}")
+        received = 0
         try:
-            async with asyncio.timeout(remaining):
+            # The read timeout only limits inactivity between chunks. A slow
+            # drip must not consume every fallback's share of the total budget.
+            async with asyncio.timeout(attempt_budget):
                 async with httpx.AsyncClient(
                     follow_redirects=True, max_redirects=5, trust_env=mode,
-                    timeout=httpx.Timeout(min(15, remaining), connect=min(8, remaining)),
+                    timeout=httpx.Timeout(min(15, attempt_budget), connect=min(8, attempt_budget)),
                     event_hooks={"request": [official_request]},
                     headers={"User-Agent": "ReproMind", "Accept-Encoding": "identity"},
                 ) as client:
@@ -110,11 +146,14 @@ async def download_github_archive(
             rate_limited = code == 403 and (exc.response.headers.get('X-RateLimit-Remaining') == '0' or exc.response.headers.get('Retry-After'))
             if code not in {408, 429, 500, 502, 503, 504} and not rate_limited:
                 terminal.add(url)
-        except (httpx.TransportError, httpx.TooManyRedirects, TimeoutError, zipfile.BadZipFile) as exc:
+        except TimeoutError:
+            diagnostics.append(f"{channel} {url}: 通道时限 {attempt_budget:.1f} 秒已用尽，接收 {received} bytes；保留后续通道预算")
+        except (httpx.TransportError, httpx.TooManyRedirects, zipfile.BadZipFile) as exc:
             diagnostics.append(f"{channel} {url}: {type(exc).__name__}: {exc}")
         finally:
             # Only this call's exclusive temporary file is removed; old archives stay intact.
             partial.unlink(missing_ok=True)
-        await notify("当前源码下载通道未完成，正在切换官方通道重试")
+        if time.monotonic() < deadline and any(endpoint not in terminal for endpoint, _ in attempts[index:]):
+            await notify("当前源码下载通道未完成，正在切换官方通道重试")
     raise RepositoryDownloadError(
         "作者源码包未能完整获取，请检查网络、核对仓库地址，或上传作者源码。", diagnostics)

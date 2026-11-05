@@ -50,7 +50,7 @@ from .author_data_loaders import declared_hub_loaders
 from .task_context import task_contract
 from .runtime_compatibility import terminal_exception, compatibility_plan
 from .execution_sandbox import current_workspace, sandbox_command, environment_root
-from .repository_download import download_github_archive, RepositoryDownloadError
+from .repository_download import download_github_archive, RepositoryDownloadError, git_network_environment
 
 
 REPOSITORY_PATTERN = re.compile(
@@ -459,20 +459,24 @@ async def _clone_repository(url: str, workspace: Path, run_workspace: Path, prog
     for attempt in range(1, 3):
         if attempt > 1 and target.exists():
             target = workspace / "sources" / f"{cache_name}-retry-{attempt}-{time.time_ns()}"
+        use_proxy = attempt == 1 and getattr(get_settings(), 'reproduction_use_system_proxy', True)
+        network_env = git_network_environment(use_proxy, url)
+        channel = '系统代理配置' if use_proxy else '直连'
         if progress:
-            await progress(f"正在通过 Git 获取作者源码，尝试 {attempt}/2")
+            await progress(f"正在通过 Git 获取作者源码：{channel}，尝试 {attempt}/2")
         command = ["git", "clone", "--depth", "1", "--single-branch", "--no-tags", "--progress", url, str(target)]
         if attempt > 1:
             command = ["git", "-c", "http.version=HTTP/1.1", *command[1:]]
         try:
             code, output = await _run_process(
                 command, run_workspace, get_settings().git_clone_timeout_seconds,
+                extra_env=network_env,
             )
         except OSError as exc:
             attempt_logs.append(f"无法启动 Git：{type(exc).__name__}: {exc}")
             code = 127
             break
-        attempt_logs.append(f"clone attempt {attempt}/2\n{output}")
+        attempt_logs.append(f"clone attempt {attempt}/2 ({channel})\n{output}")
         if code == 0 or "invalid path" in output.lower():
             break
     output = "\n".join(attempt_logs)

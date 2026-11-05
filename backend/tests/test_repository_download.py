@@ -69,6 +69,73 @@ def test_read_timeout_retries_same_author_source_by_direct_connection(tmp_path, 
     assert not list(tmp_path.glob('*.part'))
 
 
+def test_slow_first_body_cannot_consume_the_direct_fallback_budget(tmp_path, monkeypatch):
+    calls = []
+    class SlowBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'partial author archive'
+            await asyncio.Event().wait()
+    def respond(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, stream=SlowBody()) if len(calls) == 1 else httpx.Response(200, content=archive_bytes())
+    modes = mock_http(monkeypatch, respond)
+    target = tmp_path / 'source.zip'
+    result = asyncio.run(downloads.download_github_archive('author', 'model', target, timeout_seconds=.6))
+    assert target.is_file() and zipfile.is_zipfile(target)
+    assert modes == [True, False] and calls[0] == calls[1]
+    assert '保留后续通道预算' in result['diagnostics'][0]
+
+
+def test_direct_only_setting_does_not_repeat_identical_routes(tmp_path, monkeypatch):
+    calls = []
+    def respond(request):
+        calls.append(str(request.url))
+        raise httpx.ConnectError('offline', request=request)
+    modes = mock_http(monkeypatch, respond)
+    with pytest.raises(downloads.RepositoryDownloadError):
+        asyncio.run(downloads.download_github_archive('author', 'model', tmp_path / 'source.zip', trust_env=False))
+    assert modes == [False, False] and len(set(calls)) == 2
+
+
+def test_git_proxy_configuration_is_scoped_and_retains_inherited_pairs(monkeypatch):
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', 'http.userAgent')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'existing-agent')
+    monkeypatch.setattr(downloads.urllib.request, 'getproxies', lambda: {'https': 'http://localhost:7890'})
+    env = downloads.git_network_environment(True, 'https://github.com/author/model')
+    assert env['GIT_CONFIG_COUNT'] == '5' and env['GIT_CONFIG_KEY_1'] == 'http.proxy'
+    assert env['GIT_CONFIG_VALUE_1'] == 'http://localhost:7890'
+    assert 'GIT_CONFIG_KEY_0' not in env
+    assert downloads.os.environ['GIT_CONFIG_COUNT'] == '1'
+    direct = downloads.git_network_environment(False, 'https://github.com/author/model')
+    assert direct['GIT_CONFIG_VALUE_1'] == '' and direct['GIT_CONFIG_VALUE_2'] == ''
+    assert direct['NO_PROXY'] == '*' and direct['HTTPS_PROXY'] == ''
+
+
+def test_git_fallback_switches_network_route_without_overwriting_source(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '0')
+    monkeypatch.setattr(downloads.urllib.request, 'getproxies', lambda: {'https': 'http://localhost:7890'})
+    async def no_archive(*args): raise RuntimeError('archive unavailable')
+    async def git(argv, *args, **kwargs):
+        calls.append((argv, kwargs['extra_env']))
+        if len(calls) == 1:
+            target = Path(argv[-1]); target.mkdir(parents=True)
+            (target / 'partial.txt').write_text('preserved failed transfer')
+            return 1, 'connection reset'
+        target = Path(argv[-1]); target.mkdir(parents=True)
+        (target / 'train.py').write_text('author code')
+        return 0, 'complete'
+    monkeypatch.setattr(engine, '_download_repository_archive', no_archive)
+    monkeypatch.setattr(engine, '_run_process', git)
+    source, _ = asyncio.run(engine._clone_repository('https://github.com/author/model', tmp_path, tmp_path))
+    assert calls[0][1]['GIT_CONFIG_VALUE_0'] == 'http://localhost:7890'
+    assert calls[1][1]['GIT_CONFIG_VALUE_0'] == ''
+    assert source != Path(calls[0][0][-1])
+    assert (Path(calls[0][0][-1]) / 'partial.txt').read_text() == 'preserved failed transfer'
+    assert (source / '.repromind-repository.json').is_file()
+
+
 def test_official_api_redirect_resolves_default_branch_without_main_master_guesses(tmp_path, monkeypatch):
     commit = 'a' * 40
     calls = []
@@ -148,7 +215,7 @@ def test_failed_git_transfer_does_not_attempt_archive_of_missing_head(tmp_path, 
     commands = []
     async def no_archive(*args):
         raise RuntimeError('offline')
-    async def git(argv, *args):
+    async def git(argv, *args, **kwargs):
         commands.append(argv)
         (Path(argv[-1]) / '.git').mkdir(parents=True)
         return 124, 'Cloning timed out'
@@ -174,7 +241,7 @@ def test_pause_during_source_fetch_never_falls_through_to_git(tmp_path, monkeypa
 def test_missing_git_reports_recoverable_source_error_instead_of_crashing(tmp_path, monkeypatch):
     async def no_archive(*args):
         raise RuntimeError('archive channel unavailable')
-    async def no_git(*args):
+    async def no_git(*args, **kwargs):
         raise FileNotFoundError('git executable unavailable')
     monkeypatch.setattr(engine, '_download_repository_archive', no_archive)
     monkeypatch.setattr(engine, '_run_process', no_git)
