@@ -44,9 +44,11 @@ def isolate_failed_command(job, workspace, dataset, argv, cwd, env, output):
     updated = json.loads(json.dumps(execution))
     current = next(c for c in updated['commands'] if c.get('dataset') == dataset)
     current.update(argv=mapped_argv, cwd=str(mapped_cwd), pythonpath=str(target))
+    if command.get('data_dir'):
+        current['data_dir'] = remap(command['data_dir'])
     updated['display'] = '\n'.join(f"[{c.get('dataset')}] {' '.join(c['argv'])}" for c in updated['commands'])
     job.execution_command = updated
-    return mapped_argv, mapped_cwd, {**env, 'PYTHONPATH': str(target)}, remap(output), {
+    return mapped_argv, mapped_cwd, {**{key: remap(value) for key, value in env.items()}, 'PYTHONPATH': str(target)}, remap(output), {
         'dataset': dataset, 'type': 'isolated_repair_source', 'source': str(root), 'copy': str(target),
         'reason': '运行失败后隔离当前数据集源码及数据；其他命令和原源码不变',
     }

@@ -1884,6 +1884,31 @@ def _dataset_files(data_dir: Path) -> set[str]:
     return {variant for variant in variants if all(f"ind.{variant}.{part}" in names for part in PLANETOID_PARTS)}
 
 
+def _runtime_data_directory(workspace: Path, execution: dict, item: dict) -> Path:
+    """Bind an exact Planetoid file group inside this command's source copy."""
+    workspace = workspace.resolve()
+    configured = Path(str(item.get('data_dir') or execution.get('data_dir') or workspace / 'data')).resolve()
+    if configured != workspace and workspace not in configured.parents:
+        raise ValueError('实验数据目录越过项目工作区')
+    argv = [str(value) for value in item.get('argv', [])]
+    selected = next((value.split('=', 1)[1] for value in argv if value.startswith('--dataset=')), '')
+    if '--dataset' in argv and argv.index('--dataset') + 1 < len(argv):
+        selected = argv[argv.index('--dataset') + 1]
+    if not selected or selected.lower() in _dataset_files(configured):
+        return configured
+    cwd = Path(str(item.get('cwd') or execution.get('cwd') or workspace)).resolve()
+    source = Path(str(item.get('pythonpath') or execution.get('pythonpath') or cwd)).resolve()
+    if workspace not in source.parents or (cwd != source and source not in cwd.parents):
+        return configured
+    for candidate in (cwd / 'data', source / 'data', cwd.parent / 'data'):
+        candidate = candidate.resolve()
+        if source not in candidate.parents:
+            continue
+        if selected.lower() in _dataset_files(candidate):
+            return candidate
+    return configured
+
+
 def _align_dataset_commands(job: ReproductionJob) -> list[dict[str, str]]:
     """Check the planned dataset argument against actual files before training."""
     command = dict(job.execution_command or {})
@@ -2542,6 +2567,12 @@ def _diagnose_failure(output: str, cwd: Path | None = None, dataset: str = "") -
         variants = sorted(_dataset_files(cwd / "data")) if cwd else []
         variant = _choose_dataset_variant(set(variants), dataset.lower(), dataset)
         if variant:
+            missing_variant = re.match(r'ind\.(.+)\.(?:x|y|tx|ty|allx|ally|graph|test\.index)$', Path(expected.replace('\\', '/')).name)
+            if missing_variant and missing_variant.group(1).lower() in variants:
+                actual_variant = missing_variant.group(1).lower()
+                return {'type': 'dataset_directory_mismatch', 'expected': expected,
+                        'available': str(cwd / 'data'),
+                        'suggestion': f'完整数据已存在于 {cwd / "data"}，但程序读取了其他目录。应修正数据目录绑定，保留 --dataset {actual_variant}，不替换数据或修改模型。'}
             return {
                 "type": "dataset_argument_mismatch", "expected": expected,
                 "available": ", ".join(variants),
@@ -4558,6 +4589,16 @@ async def execute_reproduction(job_id: str) -> None:
                 item_env = dict(run_env)
                 if item.get("pythonpath"):
                     item_env["PYTHONPATH"] = str(item["pythonpath"])
+                if 'REPROMIND_DATA_DIR' not in ((command.get('runtime_environment') or {}).get('variables') or {}):
+                    resolved_data = _runtime_data_directory(workspace, command, item)
+                    item_env['REPROMIND_DATA_DIR'] = str(resolved_data)
+                    if resolved_data != data_root:
+                        repairs.append({'dataset': dataset, 'type': 'data_directory_resolution',
+                                        'from': str(data_root), 'to': str(resolved_data),
+                                        'reason': '当前独立源码副本内存在与命令参数完全一致的完整数据文件组；只修正目录，不改变数据集或超参数'})
+                        item['data_dir'] = str(resolved_data)
+                        command['commands'] = commands
+                        job.execution_command = dict(command)
                 await _advance(
                     session,
                     job,

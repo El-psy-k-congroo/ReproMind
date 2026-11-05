@@ -8,6 +8,7 @@ from pathlib import Path
 
 _FRAMEWORK_PROBES = {}
 MODEL_DEVICE = re.compile(r'\b(?:training|train|model(?:[_\s-]+(?:param(?:eter)?s?|body|encoder|backbone))?|encoder|decoder|body|backbone)[_\s-]+device\s*[:=]\s*(cuda(?::\d+)?|cpu|/device:(?:gpu|cpu):\d+)', re.I)
+GPU_COMPUTE = re.compile(r'\b(?:matmul|conv2d|sparsematmul|sparsetensordensematmul)(?:_\d+)?(?=\s|:).*?/device:gpu:\d+', re.I)
 
 
 def execution_logs(workspace, job_id, limit=3):
@@ -28,8 +29,10 @@ def execution_logs(workspace, job_id, limit=3):
             recent = reader.read().decode('utf-8',errors='replace')
         # Framework startup warnings can push first-step placement beyond the
         # ordinary context head. Keep only bounded device lines, not 64KB of noise.
-        device_lines = '\n'.join(line[:350] for line in startup.splitlines()
-                                 if re.search(r'/device:(?:gpu|cpu):\d+', line, re.I) or MODEL_DEVICE.search(line))[:5600]
+        candidates = list(dict.fromkeys(line for line in (startup + '\n' + recent).splitlines()
+                          if re.search(r'/device:(?:gpu|cpu):\d+', line, re.I) or MODEL_DEVICE.search(line)))
+        candidates.sort(key=lambda line: 0 if GPU_COMPUTE.search(line) else 1 if MODEL_DEVICE.search(line) else 2)
+        device_lines = '\n'.join(line[:350] for line in candidates)[:5600]
         from .runtime_log_records import printed_json_values
         printed = printed_json_values(startup,path.name,'startup') + printed_json_values(recent,path.name,'recent_tail')
         result.append({'log': path.name, 'head': head, 'tail': tail, 'printed_json_values':printed,
@@ -60,7 +63,7 @@ def device_log_evidence(logs):
                 kind = 'training_device_gpu'
             elif re.search(r'(?:training|train|model|using)\s+device\s*[:=]?\s*(?:cpu|/device:cpu:\d+)', lower):
                 kind = 'training_device_cpu'
-            elif re.search(r'\b(?:matmul|conv2d|sparsematmul|sparsetensordensematmul)(?:_\d+)?(?=\s|:).*?/device:gpu:\d+', lower):
+            elif GPU_COMPUTE.search(lower):
                 kind = 'gpu_compute_placement'
             elif 'created tensorflow device' in lower and '/device:gpu:' in lower:
                 kind = 'gpu_initialized_not_training_proof'

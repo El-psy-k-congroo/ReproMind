@@ -3,6 +3,12 @@ export function installationTransportFailed(error: string, failure: unknown): bo
   return kind === 'network' || /ProxyError|Cannot connect to proxy|ReadTimeout|ConnectionError|Connection reset|CERTIFICATE_VERIFY_FAILED|SSLError/i.test(error)
 }
 
+export function environmentFailureActive(error: string, events: Array<{ stage: string }>): boolean {
+  if (/TensorFlow 环境迁移|TensorFlow GPU 环境|GPU 环境依赖|Conda 环境构建失败|当前环境补装依赖失败/.test(error)) return true
+  const previous = [...events].reverse().find(event => !['failed', 'paused'].includes(event.stage))
+  return previous?.stage === 'environment_building'
+}
+
 export function installationIndexUnavailable(error: string, failure: unknown, logs = ''): boolean {
   const kind = failure && typeof failure === 'object' && 'kind' in failure ? failure.kind : ''
   if (kind === 'index_unavailable') return true

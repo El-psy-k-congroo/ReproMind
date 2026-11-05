@@ -4,7 +4,13 @@ import fs from 'node:fs'
 import ts from 'typescript'
 const source = fs.readFileSync(new URL('../src/environmentFailure.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
-const { installationTransportFailed, installationIndexUnavailable, tensorflowFailureHeading } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+const { installationTransportFailed, installationIndexUnavailable, tensorflowFailureHeading, environmentFailureActive } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+
+test('training data failures are not redirected to an older environment diagnosis', () => {
+  const error='NELL 运行失败。数据已存在，但训练参数与实际文件名不一致'
+  assert.equal(environmentFailureActive(error,[{stage:'environment_building'},{stage:'executing'},{stage:'result_verification'},{stage:'failed'}]),false)
+  assert.equal(environmentFailureActive('RuntimeError: TensorFlow 环境迁移第 3 步失败',[{stage:'environment_building'},{stage:'failed'}]),true)
+})
 
 test('missing channel metadata explains a legacy package-not-found diagnostic without calling it a timeout', () => {
   const error = 'RuntimeError: TensorFlow 环境迁移第 1 步失败：PackagesNotFoundError'

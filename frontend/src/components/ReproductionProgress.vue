@@ -4,7 +4,7 @@ import { api } from '../api'
 import { runDatasetScope } from '../runScope'
 import { trainingDeviceLabel } from '../gpuEvidence'
 import { baselineComparison } from '../baselineComparison'
-import { installationTransportFailed, installationIndexUnavailable, tensorflowFailureHeading } from '../environmentFailure'
+import { installationTransportFailed, installationIndexUnavailable, tensorflowFailureHeading, environmentFailureActive } from '../environmentFailure'
 import type { ReproductionActivity, ReproductionRun, TuningPlan } from '../types'
 
 const props = defineProps<{ run: ReproductionRun; approving?: boolean }>()
@@ -22,7 +22,8 @@ watch([() => props.run.id, () => props.run.status], async () => {
 const repositoryInput = ref('')
 const canRepairEnvironment = computed(() => {
   const migration = props.run.environment_spec.gpu_environment_migration as { approved?: boolean; profile?: string } | undefined
-  return props.run.status === 'failed' && !!props.run.approved_at && migration?.approved && migration.profile === 'tensorflow-windows-2.10'
+  return props.run.status === 'failed' && environmentFailureActive(props.run.error_message, props.run.events)
+    && !!props.run.approved_at && migration?.approved && migration.profile === 'tensorflow-windows-2.10'
 })
 const environmentRepairComplete = computed(() => props.run.result_json.environment_repair?.state === 'completed')
 watch(() => props.run.id, () => { repositoryInput.value = props.run.repository_url || '' }, { immediate: true })
@@ -202,6 +203,7 @@ const percent = (value: number | null | undefined) => value === null || value ==
 const metricLabel = (key: string) => key === 'accuracy' ? '准确率' : key.toUpperCase()
 const metricValue = (value: number | null | undefined, key: string) => value === null || value === undefined ? '—' : ['accuracy', 'auc', 'auroc', 'aupr', 'f1', 'precision', 'recall'].includes(key) ? percent(value) : value.toFixed(4)
 const installFailureDetail = computed(() => {
+  if (!environmentFailureActive(props.run.error_message, props.run.events)) return ''
   if (props.run.status === 'failed' && installationIndexUnavailable(props.run.error_message, props.run.environment_spec.last_failure, props.run.logs)) {
     return '上次预检没有加载 Conda 软件源索引，未完成 CUDA 与 cuDNN 版本的可用性核验。重试时会先获取索引并重新预检；此前失败发生在环境准备阶段，训练尚未启动。原依赖和快照保留。'
   }

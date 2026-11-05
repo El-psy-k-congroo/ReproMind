@@ -171,10 +171,19 @@ def test_shared_source_is_copied_only_for_failed_dataset(tmp_path, monkeypatch):
     job, workspace, source = job_fixture(tmp_path, monkeypatch)
     others = copy.deepcopy(job.execution_command['commands'][1:])
     command = job.execution_command['commands'][0]
+    data = source / 'data'
+    data.mkdir()
+    (data / 'inputs.bin').write_bytes(b'original input')
+    command['data_dir'] = str(data)
     old_bytes = (source / 'entry.py').read_bytes()
     argv, cwd, env, output, record = isolate_failed_command(job, workspace, 'graph', command['argv'], source,
-        {'PYTHONPATH': str(source)}, f'File "{source / "entry.py"}", line 1')
+        {'PYTHONPATH': str(source), 'REPROMIND_DATA_DIR': str(data),
+         'OUTPUT_DIR': str(workspace / 'outputs')}, f'File "{source / "entry.py"}", line 1')
     assert record and cwd != source and str(cwd) in output and env['PYTHONPATH'] == str(cwd)
+    assert env['REPROMIND_DATA_DIR'] == str(cwd / 'data')
+    assert job.execution_command['commands'][0]['data_dir'] == str(cwd / 'data')
+    assert (cwd / 'data' / 'inputs.bin').read_bytes() == b'original input'
+    assert env['OUTPUT_DIR'] == str(workspace / 'outputs')
     assert job.execution_command['commands'][1:] == others and argv == command['argv']
     (cwd / 'entry.py').write_text('fixed = True', encoding='utf-8')
     assert (source / 'entry.py').read_bytes() == old_bytes

@@ -1,4 +1,24 @@
 from app.api.experiment_branches import _gpu_preview_issues
+from app.services.runtime_evidence import execution_logs, device_log_evidence
+
+
+def test_gpu_compute_evidence_survives_verbose_placement_logs(tmp_path):
+    log_dir = tmp_path / 'runs' / 'current' / 'telemetry'
+    log_dir.mkdir(parents=True)
+    noise = 'variable initialization /job:localhost/replica:0/task:0/device:GPU:0\n' * 1500
+    (log_dir / 'training.log').write_text(noise + '\nFirst training step device evidence (computed nodes):\n'
+        'op=graph/MatMul device=/job:localhost/replica:0/task:0/device:GPU:0\n' + 'Epoch 10 loss=0.5\n' * 200)
+    logs = execution_logs(tmp_path, 'current')
+    assert len(logs[0]['device_lines']) <= 5600
+    assert any(row['kind'] == 'gpu_compute_placement' for row in device_log_evidence(logs))
+
+
+def test_gpu_initialization_alone_cannot_supply_compute_evidence(tmp_path):
+    log_dir = tmp_path / 'runs' / 'current' / 'telemetry'
+    log_dir.mkdir(parents=True)
+    (log_dir / 'training.log').write_text('Created TensorFlow device /device:GPU:0\n' * 1500)
+    assert not any(row['kind'] in {'training_device_gpu', 'gpu_compute_placement'}
+                   for row in device_log_evidence(execution_logs(tmp_path, 'current')))
 
 def test_session_run_device_context_is_not_graph_placement(tmp_path):
     (tmp_path / 'train.py').write_text('import tensorflow as tf\nwith tf.device("/gpu:0"):\n    sess.run(train_op)\n')
