@@ -2,6 +2,48 @@
 import re
 
 
+def resolve_run_scope(job, instruction):
+    """Resolve named/project-wide requests without confusing a subset run with the project."""
+    command = getattr(job, 'execution_command', {}) or {}
+    recorded = list(dict.fromkeys(str(row['dataset']) for row in command.get('commands', []) if row.get('dataset')))
+    paper = getattr(job, 'paper_spec', {}) or {}
+    project_datasets = [name for name in paper.get('datasets', []) if isinstance(name, str) and name.strip()]
+    catalog = list(dict.fromkeys([*project_datasets, *recorded]))
+    rows = list(command.get('commands') or [])
+    rows += [{'dataset': name} for name in catalog if name not in recorded]
+    scope = resolve_scope({**command, 'commands': rows}, instruction)
+    scope['selected_datasets'] = [name for name in catalog if name in scope['selected_datasets']]
+    text = instruction.casefold()
+    count = re.search(r'([0-9]+|[一二两三四五六七八九十]+)\s*(?:个|组|种)\s*数据集', text)
+    count_value = None
+    if count:
+        number = count[1]
+        digits = {'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+        if number.isdigit():
+            count_value = int(number)
+        elif '十' in number:
+            tens, units = number.split('十', 1)
+            if tens in {'', *digits} and units in {'', *digits}:
+                count_value = digits.get(tens, 1) * 10 + digits.get(units, 0)
+        else:
+            count_value = digits.get(number)
+    all_requested = bool(re.search(r'(?:全部|所有|每个|各个|全量|这些|上述|以上).{0,5}(?:数据集|实验)', text))
+    scope['datasets'] = catalog
+    if scope['scope_reason']:
+        return scope
+    if not scope['scope_explicit']:
+        if count and count_value != len(catalog):
+            scope.update(selected_datasets=[], scope_explicit=True,
+                         scope_reason=f'指令中的数据集数量为 {count[1]}，当前项目可识别 {len(catalog)} 个：' + '、'.join(catalog) + '。请明确名称，避免运行错误范围')
+        elif all_requested or count:
+            scope.update(selected_datasets=catalog, scope_explicit=True)
+        else:
+            scope['selected_datasets'] = recorded if len(recorded) == 1 or re.search(r'实验|项目|模型', text) else []
+            if not scope['selected_datasets']:
+                scope['scope_reason'] = '请明确要运行的数据集名称或说明运行全部数据集'
+    return scope
+
+
 def resolve_scope(command, instruction):
     rows = (command or {}).get('commands') or []
     labels = list(dict.fromkeys(str(row['dataset']) for row in rows if row.get('dataset')))

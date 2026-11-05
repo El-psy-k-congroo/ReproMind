@@ -173,11 +173,24 @@ export interface GpuPreparation {
   runtime?: { checked?: boolean; version?: string; cuda_available?: boolean; error?: string }
   gpu_environment_plan?: GpuEnvironmentPlan
 }
+export interface CopilotActionPlan extends GpuPreparation {
+  kind: string; run_id: string; instruction?: string; dataset: string; datasets?: string[]
+  selected_datasets: string[]; gpu_requested?: boolean; reason?: string; gpu_code_issues?: string[]
+}
+
+export interface CodeRevisionPreview {
+  proposal_id: string; base_run_id: string; files: string[]; diffs: Record<string, string>
+  rationale: string; expected_observation: string
+  coding_trace?: Array<{ agent: string; model: string; files?: string[]; status: string }>
+}
+
+export type BranchPreviewResponse = CodeRevisionPreview | { action_plan: CopilotActionPlan }
+
 export interface CopilotMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
-    context: { run_id?: string; suggested_action?: string; stage?: string; status?: 'pending' | 'failed' | 'partial' | 'degraded' | 'completed'; error?: string; action_plan?: GpuPreparation & { kind: string; run_id: string; instruction?: string; dataset: string; datasets?: string[]; selected_datasets: string[]; gpu_requested?: boolean; reason?: string; gpu_code_issues?: string[] } }
+    context: { run_id?: string; suggested_action?: string; stage?: string; status?: 'pending' | 'failed' | 'partial' | 'degraded' | 'completed'; error?: string; action_plan?: CopilotActionPlan }
   token_usage: number
   created_at: string
   conversation_id?: string | null

@@ -23,6 +23,7 @@ def evidence(framework='tensorflow', *, cuda=False, checked=True, source=False, 
 @pytest.mark.parametrize('question', [
     '请把实验在gpu上跑一遍', '把实验在GPU上跑一遍', '请将实验在 CUDA 上运行一遍',
     '请在GPU上运行一下实验', '请把模型在GPU上重新跑一遍',
+    '请在gpu上跑完这四个数据集', '请在GPU上把四个数据集跑通', '只跑NELL',
 ])
 def test_plain_gpu_rerun_is_not_a_code_generation_request(question):
     assert copilot._rerun_requested(question)
@@ -33,6 +34,33 @@ def test_plain_gpu_rerun_is_not_a_code_generation_request(question):
 @pytest.mark.parametrize('question', ['请把训练脚本改成GPU版本', '把模型迁移到PyTorch并在GPU上运行'])
 def test_explicit_edits_still_use_general_coding(question):
     assert copilot._code_action_requested(question)
+
+
+def test_short_but_specific_request_is_accepted():
+    assert branches.BranchPreviewRequest(instruction='只跑NELL').instruction == '只跑NELL'
+
+
+@pytest.mark.parametrize('preparation_only', [False, True])
+def test_run_request_in_code_workbench_reuses_ready_source_without_coding(tmp_path, monkeypatch, preparation_only):
+    from app.services import project_coding
+    job = SimpleNamespace(id='base', status=SimpleNamespace(value='completed'),
+        execution_command={'commands': [{'dataset': 'Dataset-D'}]},
+        paper_spec={'datasets': ['Dataset-A', 'Dataset-B', 'Dataset-C', 'Dataset-D']},
+        result_json={'code_request_failures': [{'error': 'old rejected edit'}]}, environment_spec={})
+    async def find(*args): return job
+    async def inspect(*args): return evidence(cuda=True)
+    async def forbidden(*args, **kwargs): pytest.fail('Ready run must not generate code or mutate project')
+    monkeypatch.setattr(branches, '_job', find)
+    monkeypatch.setattr(branches, '_scope', lambda job: (tmp_path, tmp_path))
+    monkeypatch.setattr(copilot, 'inspect_run_readiness', inspect)
+    monkeypatch.setattr(project_coding, 'propose_revision', forbidden)
+    result = asyncio.run(branches.preview_branch('p', 'base', branches.BranchPreviewRequest(
+        instruction='请在gpu上跑完这四个数据集', preparation_only=preparation_only), None))
+    plan = result['action_plan']
+    assert plan['kind'] == 'rerun_confirm' and plan['gpu_requested']
+    assert plan['selected_datasets'] == job.paper_spec['datasets']
+    assert not list(tmp_path.iterdir())
+    assert job.result_json['code_request_failures'] == [{'error': 'old rejected edit'}]
 
 
 @pytest.mark.parametrize('framework', ['tensorflow', 'pytorch'])
@@ -122,13 +150,16 @@ def test_reviewed_tf_preparation_generates_all_import_changes_without_model(tmp_
                  'model.py': 'import tensorflow as tf\nhidden = 16\n',
                  'data.py': 'import numpy as np\n'}
     for name, body in originals.items(): (tmp_path / name).write_text(body, encoding='utf-8')
-    job = SimpleNamespace(id='base')
+    job = SimpleNamespace(id='base', status=SimpleNamespace(value='completed'),
+                          execution_command={'commands': [{'dataset': 'Dataset-A'}, {'dataset': 'Dataset-B'}]},
+                          environment_spec={}, result_json={})
     async def find(*args): return job
     async def inspect(*args): return evidence(source=True)
     async def forbidden(*args, **kwargs): pytest.fail('Mechanical compatibility does not need remote generation')
     monkeypatch.setattr(branches, '_job', find)
     monkeypatch.setattr(branches, '_scope', lambda job: (tmp_path, tmp_path))
     monkeypatch.setattr(branches, 'inspect_run_readiness', inspect)
+    monkeypatch.setattr(copilot, 'inspect_run_readiness', inspect)
     monkeypatch.setattr(project_coding, 'propose_revision', forbidden)
     result = asyncio.run(branches.preview_branch('p', 'base', branches.BranchPreviewRequest(
         instruction='请把实验在GPU上跑一遍', preparation_only=True), None))

@@ -4,7 +4,7 @@ import { api } from '../api'
 import { renderResearchText } from '../renderResearchText'
 import RevisionRunStatus from './RevisionRunStatus.vue'
 import GpuPreparationPlan from './GpuPreparationPlan.vue'
-import type { CopilotConversation, CopilotMessage, ModelCatalog, ReproductionRun, RevisionRunPlan, TuningPlan } from '../types'
+import type { BranchPreviewResponse, CodeRevisionPreview, CopilotActionPlan, CopilotConversation, CopilotMessage, ModelCatalog, ReproductionRun, RevisionRunPlan, TuningPlan } from '../types'
 import 'katex/dist/katex.min.css'
 
 const props = defineProps<{ projectId: string; modelId: string; run: ReproductionRun | null }>()
@@ -25,7 +25,8 @@ const showBranch = ref(false)
 const branchFiles = ref<string[]>([])
 const branchFile = ref('')
 const branchInstruction = ref('')
-const branchPreview = ref<{ proposal_id: string; base_run_id: string; files: string[]; diffs: Record<string, string>; rationale: string; expected_observation: string; coding_trace?: Array<{ agent: string; model: string; files?: string[]; status: string }> } | null>(null)
+const branchPreview = ref<CodeRevisionPreview | null>(null)
+const branchRunPlan = ref<CopilotActionPlan | null>(null)
 const pendingRevision = ref<{ proposal_id: string; files: string[]; instruction: string; applied_at: string; runnable?: boolean; validation_error?: string } | null>(null)
 const isolatedCopy = ref(true)
 const revisionDataset = ref('@intent')
@@ -98,7 +99,9 @@ async function loadRunReadiness() {
   } catch (err) { rerunError.value = (err as Error).message }
 }
 async function confirmRerun(item: CopilotMessage) {
-  const plan = item.context?.action_plan
+  return confirmRerunPlan(item.context?.action_plan)
+}
+async function confirmRerunPlan(plan: CopilotActionPlan | undefined) {
   if (!props.run || !plan || !['rerun_confirm', 'initial_run_confirm'].includes(plan.kind) || plan.run_id !== props.run.id || rerunBusy.value) return
   const runId = props.run.id
   if (plan.kind === 'initial_run_confirm') {
@@ -149,15 +152,29 @@ async function previewActionPlan(item: CopilotMessage) {
   if (pendingRevision.value?.instruction !== branchInstruction.value) {
     pendingRevision.value = null; revisionPlan.value = null
   }
-  branchBusy.value = true; branchError.value = ''; branchPreview.value = null
-  try { branchPreview.value = await api.previewBranch(props.projectId, plan.run_id, '', branchInstruction.value, codingModel.value, plan.kind === 'gpu_revision') }
+  branchBusy.value = true; branchError.value = ''; branchPreview.value = null; branchRunPlan.value = null
+  try {
+    const response = await api.previewBranch(props.projectId, plan.run_id, '', branchInstruction.value, codingModel.value, plan.kind === 'gpu_revision')
+    if (props.run?.id === plan.run_id && branchInstruction.value === plan.instruction) acceptBranchResponse(response)
+  }
   catch (err) { branchError.value = (err as Error).message }
   finally { branchBusy.value = false }
 }
 const previewGpuPlan = previewActionPlan
 
+function acceptBranchResponse(response: BranchPreviewResponse) {
+  if ('action_plan' in response) {
+    branchRunPlan.value = response.action_plan
+    branchPreview.value = null
+    showBranch.value = true
+  } else {
+    branchPreview.value = response
+    branchRunPlan.value = null
+  }
+}
+
 async function loadBranchFiles() {
-  branchFiles.value = []; branchFile.value = ''; branchPreview.value = null
+  branchFiles.value = []; branchFile.value = ''; branchPreview.value = null; branchRunPlan.value = null
   pendingRevision.value = null; actionMessageId.value = ''; revisionDatasets.value = []
   revisionPlan.value = null; branchStage.value = ''
   revisionDataset.value = '@intent'
@@ -202,14 +219,18 @@ function toggleBranch() {
   }
 }
 async function previewBranch() {
-  if (!props.run || branchInstruction.value.trim().length < 8) return
+  if (!props.run || branchInstruction.value.trim().length < 2) return
   if (pendingRevision.value?.instruction !== branchInstruction.value.trim()) {
     pendingRevision.value = null; revisionPlan.value = null
   }
   actionMessageId.value = ''; revisionDatasets.value = []
   revisionDataset.value = '@intent'
-  branchBusy.value = true; branchError.value = ''; branchPreview.value = null
-  try { branchPreview.value = await api.previewBranch(props.projectId, props.run.id, branchFile.value, branchInstruction.value.trim(), codingModel.value) }
+  branchBusy.value = true; branchError.value = ''; branchPreview.value = null; branchRunPlan.value = null
+  const runId = props.run.id, instruction = branchInstruction.value.trim()
+  try {
+    const response = await api.previewBranch(props.projectId, runId, branchFile.value, instruction, codingModel.value)
+    if (props.run?.id === runId && branchInstruction.value.trim() === instruction) acceptBranchResponse(response)
+  }
   catch (err) { branchError.value = (err as Error).message }
   finally { branchBusy.value = false }
 }
@@ -426,14 +447,14 @@ onMounted(async () => {
 })
 watch(() => props.projectId, async () => { aborter?.abort(); selectedId.value = ''; messages.value = []; await loadConversations(); await loadBranchFiles(); await loadRunReadiness() })
 watch([() => props.run?.id, () => props.run?.execution_command.pythonpath, () => props.run?.code_spec.source_path], async () => { await loadBranchFiles(); await loadRunReadiness() })
-watch([branchFile, branchInstruction], () => { branchPreview.value = null })
+watch([branchFile, branchInstruction], () => { branchPreview.value = null; branchRunPlan.value = null })
 watch(selectedId, () => { if (!pendingAsk) loadMessages() })
 onUnmounted(() => aborter?.abort())
 </script>
 
 <template>
   <aside class="research-chat" aria-label="项目研究协作窗口">
-    <header class="chat-head"><div><span class="kicker">PROJECT COPILOT</span><h2>复现协作</h2><small>可基于项目证据提出多文件修改；代码改动和运行分别确认</small></div><button class="icon-button" aria-label="收起对话" @click="$emit('close')">×</button></header>
+    <header class="chat-head"><div><span class="kicker">PROJECT COPILOT</span><h2>复现协作</h2><small>可检查运行条件、准备实验或修改代码；执行前展示具体计划</small></div><button class="icon-button" aria-label="收起对话" @click="$emit('close')">×</button></header>
     <div class="chat-toolbar"><button class="button secondary" :disabled="busy || conversationBusy" @click="newConversation">＋ 新建对话</button><label>对话模型<select v-model="chatModel" aria-label="选择对话模型"><option value="">按理解与报告组调度</option><option v-for="model in catalog?.models || []" :key="model.id" :value="model.id">{{ model.label }}</option></select></label></div>
     <nav class="chat-conversations" aria-label="本项目历史对话"><div v-for="item in conversations" :key="item.id" class="chat-conversation" :class="{ active: item.id === selectedId }"><button :title="item.title" :disabled="busy || conversationBusy" @click="selectedId = item.id">{{ item.title }}</button><button class="conversation-delete" :aria-label="`删除对话 ${item.title}`" @click="deleteConversation(item)">×</button></div><small v-if="!conversations.length">本项目还没有对话</small></nav>
     <div ref="scrollArea" class="copilot-messages" @wheel.stop>
@@ -455,17 +476,25 @@ onUnmounted(() => aborter?.abort())
     <div v-if="run?.status === 'needs_input' || run?.status === 'awaiting_data' || run?.status === 'awaiting_approval'" class="chat-action-strip"><span>当前任务需要操作</span><button v-if="run.status === 'needs_input' && ['paper_spec_failed', 'code_generation_failed'].includes(run.result_json.action_required?.kind || '')" :disabled="generationBusy" @click="retryPaperSpecification">继续作者源码复现准备</button><button v-if="run.status === 'needs_input'" @click="$emit('uploadCode')">上传作者代码</button><button v-if="run.status === 'awaiting_data'" @click="$emit('uploadData')">上传数据</button><button v-if="run.status === 'awaiting_data'" @click="$emit('continuePartial')">继续可用实验</button><button v-if="run.status === 'awaiting_approval'" @click="$emit('approve')">批准执行</button><small v-if="generationError" class="chat-error">{{ generationError }}</small></div>
     <div v-if="legacyGeneratedFailure" class="chat-action-strip"><span>未开源自动编码已暂缓，旧草稿保留</span><button class="button secondary" @click="$emit('uploadCode')">上传作者代码</button></div>
     <div v-if="run" class="branch-workbench">
-      <button v-if="messages.some(m => m.role === 'user')" class="branch-toggle" :aria-expanded="showBranch" @click="toggleBranch">{{ showBranch ? '收起代码工作台' : '＋ 根据对话需求修改实验代码' }}</button>
+      <button v-if="messages.some(m => m.role === 'user')" class="branch-toggle" :aria-expanded="showBranch" @click="toggleBranch">{{ showBranch ? '收起实验工作台' : '＋ 处理运行或代码修改需求' }}</button>
         <small v-if="!showBranch && branchError && !pendingRevision" class="chat-error">{{ branchError }}</small>
       <div v-if="showBranch" class="branch-form">
-        <small>基于实验 {{ run.id.slice(0, 8) }}。Agent 可修改多个相关文件；先审查差异，再决定是否应用。后续运行复用当前项目环境，结果另存一条实验记录。</small>
+        <small>基于实验 {{ run.id.slice(0, 8) }} 检查需求。运行请求先核验已有源码和环境；需要修改代码时展示差异。实验结果另存记录。</small>
         <label>优先关注的源码<select v-model="branchFile"><option value="">由 Agent 扫描并选择相关文件</option><option v-for="file in branchFiles" :key="file" :value="file">{{ file }}</option></select></label>
         <label>编码模型<select v-model="codingModel" aria-label="选择本次编码模型"><option value="">按编码与纠错组调度</option><option v-for="model in catalog?.models || []" :key="model.id" :value="model.id">{{ model.label }}</option></select></label><small>对话模型只用于回答；编码模型默认按能力组选择。<RouterLink to="/models">配置能力组模型</RouterLink></small>
         <label>实验需求<textarea v-model="branchInstruction" rows="3" maxlength="1600" placeholder="例如：只调整隐藏维度为 128，保持其余超参数不变，并重新运行全部数据集。"></textarea></label>
         <button class="button secondary" :disabled="branchBusy || !!pendingRevision" @click="restoreBranchPreview">恢复上次通过检查的预览</button>
-        <button class="button secondary" :disabled="branchBusy || !branchFiles.length || branchInstruction.trim().length < 8" @click="previewBranch">{{ branchBusy ? '正在处理…' : '生成并检查多文件变更' }}</button>
+        <button class="button secondary" :disabled="branchBusy || !branchFiles.length || branchInstruction.trim().length < 2" @click="previewBranch">{{ branchBusy ? '正在检查需求…' : '检查需求并准备操作' }}</button>
+        <div v-if="branchRunPlan" class="branch-preview">
+          <strong>{{ ['rerun_confirm', 'initial_run_confirm'].includes(branchRunPlan.kind) ? '待确认运行计划' : '运行条件检查' }}</strong>
+          <p v-if="branchRunPlan.selected_datasets.length">数据集：{{ branchRunPlan.selected_datasets.join('、') }}；设备：{{ branchRunPlan.gpu_requested ? '仅 GPU' : '沿用当前环境' }}。</p>
+          <p>{{ branchRunPlan.reason || '已识别为运行请求，复用当前源码和项目环境。' }}</p>
+          <GpuPreparationPlan v-if="branchRunPlan.preparation" :plan="branchRunPlan" />
+          <button v-if="['rerun_confirm', 'initial_run_confirm'].includes(branchRunPlan.kind)" class="button primary" :disabled="branchBusy || rerunBusy || ['queued', 'running', 'executing'].includes(run.status)" @click="confirmRerunPlan(branchRunPlan)">确认并开始实验</button>
+          <small v-if="rerunError" class="chat-error">{{ rerunError }}</small>
+        </div>
         <div v-if="branchPreview" class="branch-preview"><strong>变更预览 · {{ branchPreview.files.length }} 个文件</strong><p>{{ branchPreview.rationale }}</p><details v-if="branchPreview.coding_trace?.length"><summary>需求规划与编码记录</summary><p v-for="(step, i) in branchPreview.coding_trace" :key="i">{{ step.agent }} · {{ step.model }} · {{ step.status }}<small v-if="step.files?.length">读取：{{ step.files.join('、') }}</small></p></details><div v-for="file in branchPreview.files" :key="file"><strong>{{ file }}</strong><pre>{{ branchPreview.diffs[file] }}</pre></div><small>预期观察：{{ branchPreview.expected_observation || '请根据实验结果核验' }}</small><button class="button primary" :disabled="branchBusy || ['queued', 'running', 'executing'].includes(run.status) || !!run.result_json.ablation_active" @click="applyRevision">确认修改代码（暂不运行）</button><button class="button secondary" @click="branchPreview = null">拒绝这次修改</button><small v-if="['queued', 'running', 'executing'].includes(run.status)">当前实验仍在运行；请先暂停并等待停止，或待结果生成后再修改。</small></div>
-        <div v-if="pendingRevision && !branchPreview" class="branch-preview">
+        <div v-if="pendingRevision && !branchPreview && !branchRunPlan" class="branch-preview">
           <strong>已修改，尚未运行</strong><p>修改文件：{{ pendingRevision.files.join('、') }}。原文件已备份；代码批准不等于环境与实验批准。</p>
           <RevisionRunStatus :plan="revisionPlan" :busy="branchBusy" :stage="branchStage" :error="branchError" />
           <label>运行范围<select v-model="revisionDataset"><option value="@intent">按本次需求：{{ revisionPlan?.selected_datasets?.join('、') || '等待核验' }}</option><option v-if="!revisionPlan?.scope_explicit" value="">全部已规划数据集</option><option v-for="item in (revisionPlan?.scope_explicit ? revisionPlan.selected_datasets : runReadiness?.datasets) || []" :key="item" :value="item">仅 {{ item }}</option></select></label>

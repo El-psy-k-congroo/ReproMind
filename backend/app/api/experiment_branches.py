@@ -47,7 +47,7 @@ _REVISION_RUN_LOCKS: dict[tuple[str, str, str], asyncio.Lock] = {}
 
 class BranchPreviewRequest(BaseModel):
     file: str = Field(default="", max_length=240)
-    instruction: str = Field(min_length=8, max_length=1600)
+    instruction: str = Field(min_length=2, max_length=1600)
     model_id: str = Field(default="", max_length=128)
     preparation_only: bool = False
 
@@ -484,10 +484,15 @@ async def branch_files(project_id: str, job_id: str, db: AsyncSession = Depends(
 @router.post("/{job_id}/branch-preview")
 async def preview_branch(project_id: str, job_id: str, payload: BranchPreviewRequest,
                          db: AsyncSession = Depends(get_db)) -> dict:
-    """One general coding workflow; keyword recognition only sets safety checks."""
-    from ..services.project_coding import propose_revision
+    """Prepare a run request directly, or draft the source changes it actually needs."""
     job = await _job(db, project_id, job_id)
     workspace, source = _scope(job)
+    from .copilot import _rerun_requested, _code_action_requested, _rerun_action_plan
+    if _rerun_requested(payload.instruction) and not _code_action_requested(payload.instruction):
+        plan = await _rerun_action_plan(db, SimpleNamespace(id=project_id), job_id, payload.instruction, job=job)
+        if plan['kind'] != 'gpu_revision':
+            return {'action_plan': plan}
+    from ..services.project_coding import propose_revision
     if payload.file:
         _code_file(source, payload.file)
     if payload.model_id:

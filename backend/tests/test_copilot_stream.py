@@ -315,7 +315,8 @@ def test_explicit_code_change_gets_preview_plan_not_rerun_answer(monkeypatch):
     assert "暂不能执行重跑" not in answer["content"]
 
 
-def test_restart_experiment_stream_returns_confirmation_without_model_call(monkeypatch):
+@pytest.mark.parametrize('question', ['请重新开始实验', '请在gpu上跑完这四个数据集'])
+def test_restart_experiment_stream_returns_confirmation_without_model_call(monkeypatch, question):
     session = FakeSession()
     project = SimpleNamespace(id="project-1", name="合成测试项目", description="")
     conversation = SimpleNamespace(title="新对话", updated_at=None)
@@ -347,7 +348,7 @@ def test_restart_experiment_stream_returns_confirmation_without_model_call(monke
     async def collect():
         response = await copilot.stream_answer(
             "project-1", "conversation-1",
-            copilot.CopilotQuestion(question="请重新开始实验", run_id="run-1", request_id="offline-test"),
+            copilot.CopilotQuestion(question=question, run_id="run-1", request_id="offline-test"),
             db=session,
         )
         return "".join([chunk async for chunk in response.body_iterator])

@@ -388,7 +388,7 @@ def _identity_answer(project: Project) -> str:
             "有状态影响的操作会显示确认步骤；修改代码和运行实验需要分别确认，不会仅凭对话直接执行。")
 
 
-_RUN_VERBS = r'重跑|重新跑|再跑|跑一下|跑一遍|运行|启动|开始训练|训练|采样|推理|评估|编码|解码'
+_RUN_VERBS = r'重跑|重新跑|再跑|跑完|跑通|跑起来|跑一下|跑一遍|跑|运行|执行|启动|开始训练|训练|采样|推理|评估|编码|解码'
 
 
 def _run_instruction(question: str) -> bool:
@@ -405,11 +405,11 @@ def _run_instruction(question: str) -> bool:
                 imperative_context = not bool(re.search(
                     r'请问|说明|解释|介绍|分析|核对|检查|列出|展示|查看|为什么|如何|能否|是否|[？?]', clause))
     for clause, imperative_context in clauses:
-        if re.search(r'请问|(?:现在|当前|目前)(?:还|的|有)|可以吗|能够吗|能否|是否|为什么|如何|怎么|吗[？?]?\s*$', clause):
+        if re.search(r'请问|(?:现在|当前|目前)(?:还|的|有)|可以吗|能够吗|能否|是否|为什么|如何|怎么|吗[？?]*\s*$', clause):
             continue
         if re.match(r'\s*(?:不要|别|先不|只(?:问|解释|分析|预览))', clause):
             continue
-        if (re.search(r'^(?:\s*)(?:请|帮我|麻烦|现在|直接|立即|把|将|开始|启动|运行|训练|采样|评估|推理|编码|解码|重跑|重新|从头)', clause)
+        if (re.search(r'^(?:\s*)(?:请|帮我|麻烦|现在|直接|立即|把|将|开始|启动|运行|执行|只跑|仅跑|训练|采样|评估|推理|编码|解码|重跑|重新|从头)', clause)
                 or imperative_context and re.match(r'\s*(?:在|于|使用|用|基于|通过|按)', clause)):
             if re.search(_RUN_VERBS, clause) and not re.search(r'怎么|如何|为什么|能否|是否|假如|如果.{0,15}(?:能|可以|要|需)', clause):
                 # An imperative can contain an explanation or a negative for
@@ -1358,25 +1358,18 @@ def _restart_project_answer(context: dict) -> str:
             "本次没有修改代码、恢复训练或重启服务。若要重跑，请说明数据集和是否使用 GPU。")
 
 
-async def _rerun_action_plan(db: AsyncSession, project: Project, run_id: str, question: str) -> dict:
-    statement = select(ReproductionJob).where(ReproductionJob.project_id == project.id)
-    statement = statement.where(ReproductionJob.id == run_id) if run_id else statement.order_by(ReproductionJob.created_at.desc()).limit(1)
-    job = await db.scalar(statement)
+async def _rerun_action_plan(db: AsyncSession, project: Project, run_id: str, question: str,
+                            *, job: ReproductionJob | None = None) -> dict:
+    if job is None:
+        statement = select(ReproductionJob).where(ReproductionJob.project_id == project.id)
+        statement = statement.where(ReproductionJob.id == run_id) if run_id else statement.order_by(ReproductionJob.created_at.desc()).limit(1)
+        job = await db.scalar(statement)
     if not job:
         return {"kind": "unavailable", "reason": "当前项目没有可重跑的实验记录"}
-    commands = (job.execution_command or {}).get("commands") or []
-    datasets = list(dict.fromkeys(str(item.get("dataset")) for item in commands if item.get("dataset")))
-    lowered = question.lower()
-    matches = [name for name in datasets if name.lower() in lowered]
-    all_requested = bool(re.search(r"(?:全部|所有|每个|所有的|全量).{0,5}(?:数据|实验)", question))
-    # "重新开始实验" means a fresh, independent full run, not resuming a paused process.
-    all_requested = all_requested or bool(re.search(r"(?:重新|从头)(?:开始|启动).{0,5}实验", question))
-    all_requested = all_requested or bool(re.search(r'(?:模型|项目).{0,30}(?:重跑|重新跑|重新运行|再跑)', question))
-    # A project-level rerun refers to its complete recorded dataset scope, not
-    # an arbitrary last dataset. Explicit dataset names still take precedence.
-    all_requested = all_requested or (not matches and '实验' in question and _rerun_requested(question))
-    selected = datasets if all_requested and not matches else matches if matches else (
-        datasets if len(datasets) == 1 and not matches else [])
+    from ..services.experiment_scope import resolve_run_scope
+    scope = resolve_run_scope(job, question)
+    datasets = scope['datasets']
+    selected = scope['selected_datasets']
     dataset = "、".join(selected)
     # A new run must not silently weaken the selected run's GPU-only requirement.
     gpu = (_goal_requires_gpu(question)
@@ -1398,9 +1391,9 @@ async def _rerun_action_plan(db: AsyncSession, project: Project, run_id: str, qu
     elif job.status.value not in {"paused", "completed", "failed", "awaiting_data"}:
         required = (job.result_json or {}).get('action_required') or {}
         plan["reason"] = required.get('reason') or getattr(job, 'message', '') or "当前准备尚未完成，请先解决准备阶段的阻塞"
-    elif not dataset:
+    elif not dataset or scope['scope_reason']:
         plan["kind"] = "needs_dataset"
-        plan["reason"] = "没有唯一匹配的数据集；请在对话中明确数据集名称"
+        plan["reason"] = scope['scope_reason'] or "没有唯一匹配的数据集；请在对话中明确数据集名称"
     elif gpu:
         try:
             readiness = await inspect_run_readiness(job)
@@ -1433,7 +1426,7 @@ def _rerun_answer(plan: dict) -> str:
                 + ("要求 GPU，无法使用时停止。" if plan.get('gpu_requested') else '')
                 + "本次回答尚未启动实验。")
     if kind == "needs_dataset":
-        return ("我不能唯一确定要运行的数据集。当前实验规划包含："
+        return (str(plan.get('reason') or '不能唯一确定运行范围') + "。当前项目包含："
                 + "、".join(plan.get("datasets") or []) + "。请直接在对话中说出目标数据集；本次未运行。")
     if kind == "rerun_confirm":
         return (f"已从你的指令识别目标数据集：**{plan['dataset']}**；"

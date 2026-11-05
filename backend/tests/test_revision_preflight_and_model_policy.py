@@ -101,9 +101,12 @@ def test_gpu_preview_uses_general_planner_and_preserves_source(tmp_path, monkeyp
     from app.services import project_coding
     original = 'import tensorflow as tf\n'.replace('\\n', '\n')
     (tmp_path / 'train.py').write_text(original, encoding='utf-8')
-    base = SimpleNamespace(id='base', paper_spec={}, environment_spec={}, execution_command={}, result_json={})
+    base = SimpleNamespace(id='base', status=SimpleNamespace(value='completed'), paper_spec={},
+                           environment_spec={}, execution_command={'commands': [{'dataset': 'Dataset-A'}]}, result_json={})
     async def job(*_): return base
-    async def readiness(_): return {'gpu_environment_plan': {}}
+    async def readiness(_): return {'framework': 'tensorflow', 'gpu_environment_plan': {},
+                                   'runtime': {'checked': True, 'cuda_available': True},
+                                   'gpu_code_issues': ['训练入口需要核对设备放置']}
     async def propose(source, instruction, model, **kwargs):
         assert instruction == '请在 GPU 上运行'
         assert source == tmp_path
@@ -111,6 +114,8 @@ def test_gpu_preview_uses_general_planner_and_preserves_source(tmp_path, monkeyp
     monkeypatch.setattr(branches, '_job', job)
     monkeypatch.setattr(branches, '_scope', lambda _: (tmp_path, tmp_path))
     monkeypatch.setattr(branches, 'inspect_run_readiness', readiness)
+    from app.api import copilot
+    monkeypatch.setattr(copilot, 'inspect_run_readiness', readiness)
     monkeypatch.setattr(project_coding, 'propose_revision', propose)
     saved = tmp_path / 'p.json'
     saved.write_text('{}')

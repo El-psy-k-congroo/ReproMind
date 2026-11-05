@@ -1,4 +1,4 @@
-import type { AnalyticsOverview, ArtifactKind, CopilotConversation, CopilotMessage, GpuEnvironmentPlan, ModelCatalog, ModelRouting, RevisionRunPlan, Project, ProjectListItem, ReproductionActivity, ReproductionRun, TelemetrySeries, TuningPlan } from './types'
+import type { AnalyticsOverview, ArtifactKind, BranchPreviewResponse, CopilotConversation, CopilotMessage, GpuEnvironmentPlan, ModelCatalog, ModelRouting, RevisionRunPlan, Project, ProjectListItem, ReproductionActivity, ReproductionRun, TelemetrySeries, TuningPlan } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -85,7 +85,7 @@ export const api = {
   branchFiles: (projectId: string, runId: string) =>
     request<{ files: string[] }>(`/projects/${projectId}/reproductions/${runId}/branch-files`),
   previewBranch: (projectId: string, runId: string, file: string, instruction: string, modelId: string, preparationOnly = false) =>
-    request<{ proposal_id: string; base_run_id: string; files: string[]; diffs: Record<string, string>; rationale: string; expected_observation: string; coding_trace?: Array<{ agent: string; model: string; files?: string[]; status: string }> }>(`/projects/${projectId}/reproductions/${runId}/branch-preview`, {
+    request<BranchPreviewResponse>(`/projects/${projectId}/reproductions/${runId}/branch-preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file, instruction, model_id: modelId, preparation_only: preparationOnly }),
     }),
   applyRevision: (projectId: string, runId: string, proposalId: string) =>
